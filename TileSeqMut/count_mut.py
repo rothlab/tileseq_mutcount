@@ -191,7 +191,7 @@ class readSam(object):
             # print(f"{os.path.dirname(self._r1)}/{wt_id}*_R1*.sam")
             wt_r1_sam  = glob.glob(f"{os.path.dirname(self._r1)}/{wt_id}*_R1*.sam")[0]
             self._mut_log.info("WT file used for calibration:\t" + wt_r1_sam)
-            cmd_r1 = f"calibratePhred.R {wt_r1_sam} -p {self._param} -o {phred_output_r1} -l {log_f} --silent --cores {self._cores}"
+            cmd_r1 = f"tsm calibratePhred {wt_r1_sam} -p {self._param} -o {phred_output_r1} -l {log_f} --silent --cores {self._cores}"
             if self._sroverride:
                 cmd_r1 = cmd_r1 + " --srOverride"
             self._mut_log.info(cmd_r1)
@@ -204,7 +204,7 @@ class readSam(object):
             log_f = os.path.join(self._output_counts_dir, f"{wt_id}_R2_phred.log")
             wt_r2_sam  = glob.glob(f"{os.path.dirname(self._r2)}/{wt_id}*_R2*.sam")[0]
             self._mut_log.info("WT file used for calibration:\t" + wt_r2_sam)
-            cmd_r2 = f"calibratePhred.R {wt_r2_sam} -p {self._param} -o {phred_output_r2} -l {log_f} --silent --cores {self._cores}"
+            cmd_r2 = f"tsm calibratePhred {wt_r2_sam} -p {self._param} -o {phred_output_r2} -l {log_f} --silent --cores {self._cores}"
             if self._sroverride:
                 cmd_r2 = cmd_r2 + " --srOverride"
             self._mut_log.info(cmd_r2)
@@ -235,7 +235,7 @@ class readSam(object):
 
     def adjust_er_phix(self):
         """
-        If not phix thred adjusted, run calibratePhred.R with phix reads
+        If not phix thred adjusted, run tsm calibratePhred with phix reads
         Before running calibrate phred, shrink sam file size by selecting reads aligned to phix only
         """
         dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -260,7 +260,7 @@ class readSam(object):
             os.system(cmd)
 
             log_f = os.path.join(self._output_counts_dir, f"phix_phred.log")
-            cmd = f"calibratePhred.R {phix_r1} -p {self._param} -o {phred_output_r1} -l {log_f} --silent --cores {self._cores} --fastaref {phix_fasta}"
+            cmd = f"tsm calibratePhred {phix_r1} -p {self._param} -o {phred_output_r1} -l {log_f} --silent --cores {self._cores} --fastaref {phix_fasta}"
             if self._sroverride:
                 cmd = cmd + " --srOverride"
             os.system(cmd)
@@ -275,7 +275,7 @@ class readSam(object):
             os.system(cmd)
 
             log_f = os.path.join(self._output_counts_dir, f"phix_phred.log")
-            cmd = f"calibratePhred.R {phix_r2} -p {self._param} -o {phred_output_r2} -l {log_f} --silent --cores" \
+            cmd = f"tsm calibratePhred {phix_r2} -p {self._param} -o {phred_output_r2} -l {log_f} --silent --cores" \
                   f" {self._cores} --fastaref {phix_fasta}"
             if self._sroverride:
                 cmd = cmd + " --srOverride"

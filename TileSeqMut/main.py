@@ -6,7 +6,7 @@
 #    - Fastq files (gzipped)
 
 # what does this script do?
-# 1. Read input csv file and convert to json (using csv2Json.R (you need to
+# 1. Read input csv file and convert to json (using tsm csv2Json (you need to
 # install required packages in R)
 # 1. Read paramters from json file
 # 2. Read input fastq file, align reads to reference sequence, generate sam files. (bowtie2 required)
@@ -482,13 +482,13 @@ def check(args):
     return path to json
     """
 
-    # two script needed: csv2json.R and calibratePhred.R
-    test_csv2json = subprocess.getstatusoutput("csv2json.R -h")
-    test_caliPhred = subprocess.getstatusoutput("calibratePhred.R -h")
+    # two script needed: csv2json and calibratePhred from TileSeqMave
+    test_csv2json = subprocess.getstatusoutput("tsm csv2json -h")
+    test_caliPhred = subprocess.getstatusoutput("tsm calibratePhred -h")
     if test_csv2json[0] != 0:
-        raise OSError(f"csv2json.R failed with error {test_csv2json[1]}")
+        raise OSError(f"tsm csv2json failed with error {test_csv2json[1]}")
     if test_caliPhred[0] != 0:
-        raise OSError(f"calibratePhred.R failed with error {test_caliPhred[1]}")
+        raise OSError(f"tsm calibratePhred failed with error {test_caliPhred[1]}")
 
     # check bowtie2 and bowtie2-build
     test_bt = subprocess.getstatusoutput("bowtie2 -h")
@@ -521,9 +521,9 @@ def check(args):
         if os.path.isfile(param_json):
              os.remove(param_json)
         if args.sr_Override:
-            convert = f"csv2json.R {args.param} -o {param_json} --srOverride"
+            convert = f"tsm csv2json {args.param} -o {param_json} --srOverride"
         else:
-            convert = f"csv2json.R {args.param} -o {param_json}"
+            convert = f"tsm csv2json {args.param} -o {param_json}"
         os.system(convert)
 
     # if the file ends with .json, do nothing
