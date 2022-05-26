@@ -284,43 +284,53 @@ def parse_jobs_galen(job_list, logger):
     job_list: list of job ids
     logger: logging object
     """
-    qstat_cmd = ["squeue", "-j", ",".join(job_list)]
-    job = subprocess.run(qstat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    qstat_out = job.stdout.decode("utf-8", errors="replace")
-    qstat_err = job.stderr.decode("utf-8", errors="replace")
-    logger.debug(qstat_out)
-    logger.debug(qstat_err)
+    
+    cmd = "squeue -u $USER -j {}".format(",".join(job_list))
+    job = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # get status of jobs from job_list
+    squeue_output = job.stdout.read().decode("utf-8", errors="replace") 
+    squeue_error = job.stderr.read().decode("utf-8", errors="replace")
+    logger.debug(squeue_output)
+    logger.debug(squeue_error)
+
     while True:
-        running_jobs, queued_jobs, completed_jobs = [], [], []
-        if qstat_out != "":
-            # make df
-            qstat_df = pd.DataFrame([i.split() for i in qstat_out.split("\n")])
-            qstat_df = qstat_df.rename(columns=qstat_df.iloc[0])
-            #qstat_df = qstat_df.drop(qstat_df.index[1])
-            logger.debug(qstat_df)
-            # get all active job ID
-            running_jobs = qstat_df[qstat_df["ST"] == "R"]["JOBID"].tolist()
-            # in queue
-            queued_jobs = qstat_df[qstat_df["ST"] == "PD"]["JOBID"].tolist()
-            # completing
-            completed_jobs = qstat_df[qstat_df["ST"] == "CG"]["JOBID"].tolist()
-            #logger.debug(running_jobs)
-            #logger.debug(queued_jobs)
+        running_jobs, queued_jobs, completed_jobs, stuck_jobs, suspended_jobs = [], [], [], [], []
+
+        if squeue_output != "":
+            job_entries_df = pd.DataFrame([i.split() for i in squeue_output.split("\n")])
+            job_entries_df = job_entries_df.rename(columns=job_entries_df.iloc[0]).dropna()
+            logger.debug(job_entries_df)
+
+            running_jobs = job_entries_df[job_entries_df["ST"] == "R"]["JOBID"].tolist() # active job IDs
+            queued_jobs = job_entries_df[job_entries_df["ST"] == "PD"]["JOBID"].tolist() # pending job IDs
+            completed_jobs = job_entries_df[job_entries_df["ST"] == "CG"]["JOBID"].tolist() # completing job IDs
+            suspended_jobs = job_entries_df[job_entries_df["ST"] == "S"]["JOBID"].tolist() # suspended job IDs
+            stuck_jobs = job_entries_df[job_entries_df["NODELIST(REASON)"].str.contains("launch failed requeued held")]["JOBID"].tolist() # stuck job IDs
 
         logger.info(f"{len(queued_jobs)} jobs queued")
-        logger.info(f"{len(running_jobs)} jobs running")
+        logger.info(f"{len(running_jobs)} jobs running\n")
 
-        final_list = list(set(running_jobs + queued_jobs))
-        if final_list == []:
-            return True
-        else:
-            # check in 10min
-            time.sleep(600)
-            job_list = final_list
-            qstat_cmd = ["squeue", "-j", ",".join(job_list)]
-            job = subprocess.run(qstat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            qstat_out = job.stdout.decode("utf-8", errors="replace")
-            qstat_err = job.stderr.decode("utf-8", errors="replace")
+        #attempt to requeue suspended jobs
+        if len(suspended_jobs):
+            logger.info(f"WARNING: Suspended jobs detected! {len(suspended_jobs)} jobs suspended_jobs")
+            logger.info("Requeuing jobs {}...".format(" ".join(suspended_jobs)))
+            requeue_cmd = "scontrol requeue {}".format(" ".join(suspended_jobs))
+
+        #attempt to release stuck jobs
+        if len(stuck_jobs):
+            logger.info(f"WARNING: Failed/Held jobs detected! {len(stuck_jobs)} jobs stuck")
+            logger.info("Attempting to release jobs {}...".format(" ".join(stuck_jobs)))
+            release_cmd = "scontrol release {}".format(" ".join(stuck_jobs))
+
+        job_list = running_jobs + queued_jobs + suspended_jobs + stuck_jobs
+        if not len(job_list):
+            return
+
+        #check in 10 mins
+        time.sleep(600)
+        cmd = "squeue -u $USER -j {}".format(",".join(job_list))
+        job = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # get status of remaining jobs from job_list
+        squeue_output = job.stdout.read().decode("utf-8", errors="replace")
+        logger.debug(squeue_output)
 
 
 def submit_given_jobs(shfile, logger, mt, mm, cores, env=""):
