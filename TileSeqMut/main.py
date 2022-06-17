@@ -326,6 +326,9 @@ class fastq2counts(object):
         if self._args.calibratePhredWT:
             cmd = cmd + "--calibratePhredWT "
 
+        if self._args.errorOverride:
+            cmd = cmd + "--errorOverride"
+
         if self._args.environment == "BC2" or self._args.environment == "BC" or self._args.environment == "DC":
             logging.info("Submitting mutation counts jobs....")
             job_id = cluster.mut_count_sh_ccbr(sample, cmd, self._args.mt, self._args.mm, sh_output, self._log,
@@ -675,6 +678,7 @@ if __name__ == "__main__":
                                                                       "use wt to calibrate phred scores")
     parser.add_argument("--calibratePhredPhix", action="store_true", help="When this parameter is provided, "
                                                                       "use phix alignments to calibrate phred scores")
+    parser.add_argument("--errorOverride", action="store_true", help="When this parameter is provided, use the observed error probability instead of max(PHRED specification, observed error)")
     parser.add_argument("--resubmit", action="store_true", help="For a finished run, batch resubmit failed scripts ("
                                                                 "if any)")
     args = parser.parse_args()
