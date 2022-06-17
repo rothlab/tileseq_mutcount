@@ -80,6 +80,7 @@ class readSam(object):
         offreads.write("r1_start, r1_len, r2_start, r2_len\n")
         offreads.close()
 
+        self._error_override = arguments.errorOverride
         self._base = arguments.base
         self._posteriorQC = arguments.posteriorQC
         self._mut_log = loggerobj
@@ -443,7 +444,7 @@ class readSam(object):
 
             jobs.append(pool.apply_async(process_wrapper, (row, self._seq, self._cds_seq, self._seq_lookup, self._tile_begins,
                                                self._tile_ends, self._qual, self._mut_log, self._mutrate,
-                                                           self._base, self._posteriorQC, adjusted_er)))
+                                                           self._base, self._posteriorQC, self._error_override, adjusted_er)))
             row = {} # flush
         offmap.close()
         r1_f.close()
@@ -555,11 +556,11 @@ class readSam(object):
 
 
 def process_wrapper(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log, mutrate, base,
-                    posteriorQC, adjusted_er):
+                    posteriorQC, errorOverride, adjusted_er):
     """
     Wrapper function to process each line (pair of reads)
     """
     mut_parser = locate_mut.MutParser(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log,
-                                      mutrate, base, posteriorQC, adjusted_er)
+                                      mutrate, base, posteriorQC, errorOverride, adjusted_er)
     hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df = mut_parser._main()
     return hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df

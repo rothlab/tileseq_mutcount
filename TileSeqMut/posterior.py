@@ -10,7 +10,7 @@ import time
 from fractions import Fraction
 
 def cluster(mut_cluster: dict, r1_qual: str, r2_qual: str, r1_mappos: dict,
-                        r2_mappos: dict, mut_rate: float, cut_off: float, base: int, posteriorQC: bool, adjustthred:list):
+                        r2_mappos: dict, mut_rate: float, cut_off: float, base: int, posteriorQC: bool, error_override: bool, adjustthred:list):
     """
     Parse cluster of mutations
     Mutations are clustered together if they are within
@@ -24,21 +24,33 @@ def cluster(mut_cluster: dict, r1_qual: str, r2_qual: str, r1_mappos: dict,
     @param cut_off: posterior cutoff defined by user
     @param base: phred base (default 33)
     @param posteriorQC: boolean, if posterior QC required
+    @param error_override: boolean, if error probabilities should be obtained from observed error
+    @param adjustthred: list with path to phred calibration files for R1 and R2
     """
     if posteriorQC:
         pos_df, all_df, clustered_r1_mut, clustered_r2_mut = call_prob_withposterior(mut_cluster, r1_mappos,
                                                                                      r2_mappos, r1_qual, r2_qual,
-                                                                                     mut_rate, base, cut_off, adjustthred)
+                                                                                     mut_rate, base, cut_off, error_override, adjustthred)
     else:
         pos_df, all_df, clustered_r1_mut, clustered_r2_mut = call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual,
-                                                                       r2_qual, mut_rate, base, cut_off, adjustthred)
+                                                                       r2_qual, mut_rate, base, cut_off, error_override, adjustthred)
 
     return pos_df, all_df, clustered_r1_mut, clustered_r2_mut
 
 
-def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, base, cut_off, adjustthred):
+def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, base, cut_off, error_override, adjustthred):
     """
-
+    @param mut_cluster dictionary where the values are dfs with mutations from both r1 and r2, the keys are
+    group numbers, values are df of mutations
+    @param r1_mappos: dictionary with position mapped between ref and read 1
+    @param r2_mappos: dictionary with position mapped between ref and read 2
+    @param r1_qual: quality of read 1
+    @param r2_qual: quality of read 2
+    @param mut_rate: mut rate defined by user
+    @param base: phred base (default 33)
+    @param cut_off: posterior cutoff defined by user
+    @param error_override: boolean, if error probabilities should be obtained from observed error
+    @param adjustthred: list with path to phred calibration files for R1 and R2
     """
 
     pos_prob = {"m": [], "prob": [], "read": []}
@@ -60,7 +72,7 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
                 r1_qual_base = r1_qual[r1_mappos[int(row["pos"])]]
                 # calculate posterior prob
                 pos = bayesian_variant_call([row["ref_r2"], row["alt_r2"]], [r1_qual_base, row["qual_r2"]],
-                                            row["ref_r2"], mut_rate, base, c_size, adjustthred=adjustthred)
+                                            row["ref_r2"], mut_rate, base, c_size, error_override, adjustthred=adjustthred)
                 # if posterior for alt base is greater than cutoff
                 # AND greater than wt
                 if pos[row["alt_r2"]] > cut_off and pos[row["ref_r2"]] <= pos[row["alt_r2"]]:
@@ -78,7 +90,7 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
                 pos = bayesian_variant_call([row["alt_r1"], row["ref_r1"]], [row["qual_r1"], r2_qual_base],
                                             row["ref_r1"],
                                             mut_rate,
-                                            base, c_size, adjustthred=adjustthred)
+                                            base, c_size, error_override, adjustthred=adjustthred)
                 if pos[row["alt_r1"]] > cut_off and pos[row["ref_r1"]] <= pos[row["alt_r1"]]:
 
                     pos_prob["m"].append(row["m_r1"])
@@ -89,7 +101,7 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
 
                 basecall = [row["alt_r1"], row["alt_r2"]]
                 qual = [row["qual_r1"], row["qual_r2"]]
-                pos = bayesian_variant_call(basecall, qual, row["ref_r1"], mut_rate, base, c_size, adjustthred=adjustthred)
+                pos = bayesian_variant_call(basecall, qual, row["ref_r1"], mut_rate, base, c_size, error_override, adjustthred=adjustthred)
 
                 # if (pos[row["ref_r1"]] > pos[row["alt_r1"]]) and (pos[row["ref_r2"]] > pos[row["alt_r2"]]): continue
 
@@ -111,7 +123,20 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
     return pos_df, pd.DataFrame({}), pd.DataFrame({}), pd.DataFrame({})
 
 
-def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, base, cut_off, adjustthred):
+def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, base, cut_off, error_override, adjustthred):
+    """
+    @param mut_cluster dictionary where the values are dfs with mutations from both r1 and r2, the keys are
+    group numbers, values are df of mutations
+    @param r1_mappos: dictionary with position mapped between ref and read 1
+    @param r2_mappos: dictionary with position mapped between ref and read 2
+    @param r1_qual: quality of read 1
+    @param r2_qual: quality of read 2
+    @param mut_rate: mut rate defined by user
+    @param base: phred base (default 33)
+    @param cut_off: posterior cutoff defined by user
+    @param error_override: boolean, if error probabilities should be obtained from observed error
+    @param adjustthred: list with path to phred calibration files for R1 and R2
+    """
 
     pos_prob = {"m": [], "prob": [], "read": []}
     all_prob = {"m": [], "prob": [], "read": [], "pass": []}
@@ -179,7 +204,7 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
                 r2_qual_base = r2_qual[r2_mappos[int(row["pos"])]]
 
                 pos = bayesian_variant_call([row["alt_r1"], row["ref_r1"]], [row["qual_r1"], r2_qual_base],
-                                            row["ref_r1"], mut_rate, base, c_size, adjustthred)
+                                            row["ref_r1"], mut_rate, base, c_size, error_override, adjustthred)
                 all_prob["m"].append(row["m_r1"])
                 all_prob["prob"].append(pos[row["alt_r1"]])
                 all_prob["read"].append("r1")
@@ -206,7 +231,7 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
 
                 basecall = [row["alt_r1"], row["alt_r2"]]
                 qual = [row["qual_r1"], row["qual_r2"]]
-                pos = bayesian_variant_call(basecall, qual, row["ref_r1"], mut_rate, base, c_size, adjustthred)
+                pos = bayesian_variant_call(basecall, qual, row["ref_r1"], mut_rate, base, c_size, error_override, adjustthred)
                 all_prob["m"].append(row["m_r1"])
                 all_prob["prob"].append((pos[row["alt_r1"]], pos[row["alt_r2"]]))
                 all_prob["read"].append(("r1", "r2"))
@@ -265,12 +290,14 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
     return pos_df, all_df, clustered_r1_mut, clustered_r2_mut
 
 
-def bayesian_variant_call(basecall, qual, wt, mut_rate, base, clusterSize, adjustthred):
+def bayesian_variant_call(basecall, qual, wt, mut_rate, base, clusterSize, error_override, adjustthred):
     """
     @param basecall: list of base calls (i.e R1 -> A R2 -> C :  ["A", "C"])
     @param phred: phred score for the base calls (in letters) ["!", "J"]
     @param wt: wild type base
     @param mut_rate: mutation rate
+    @param error_override: boolean, if error probabilities should be obtained from observed error
+    @param adjustthred: list with path to phred calibration files for R1 and R2
     return: dictinary with basecall as keys and post prob as values
     """
     # all possible hypo bases
@@ -292,9 +319,13 @@ def bayesian_variant_call(basecall, qual, wt, mut_rate, base, clusterSize, adjus
         phred_r2_df = pd.read_csv(adjustthred[1], index_col=0)
         phred_r1_df["observed"] = phred_r1_df["observed"].fillna(phred_r1_df["specification"])
         phred_r2_df["observed"] = phred_r2_df["observed"].fillna(phred_r2_df["specification"])
-        phred_r1_df.observed[(phred_r1_df["observed"] == 0) | (phred_r1_df["observed"] == 1)] = phred_r1_df["specification"]
-        phred_r2_df.observed[(phred_r2_df["observed"] == 0) | (phred_r2_df["observed"] == 1)] = phred_r2_df["specification"]
-
+        
+        if error_override: # use the observed error rate
+            phred_r1_df.observed[(phred_r1_df["observed"] == 0) | (phred_r1_df["observed"] == 1)] = phred_r1_df["specification"]
+            phred_r2_df.observed[(phred_r2_df["observed"] == 0) | (phred_r2_df["observed"] == 1)] = phred_r2_df["specification"]
+        else: # select the maximum error rate from observed error rate and specification error rate
+            phred_r1_df.observed[(phred_r1_df["observed"] == 0) | (phred_r1_df["observed"] == 1) | (phred_r1_df["observed"] < phred_r1_df["specification"])] = phred_r1_df["specification"]
+            phred_r2_df.observed[(phred_r2_df["observed"] == 0) | (phred_r2_df["observed"] == 1) | (phred_r2_df["observed"] < phred_r2_df["specification"])] = phred_r2_df["specification"]
         r1_qual = qual[0].split(",")
         phred_r1 = np.prod(phred_r1_df[phred_r1_df.index.isin(r1_qual)]["observed"])
         r2_qual = qual[1].split(",")

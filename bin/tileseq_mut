@@ -53,6 +53,7 @@ parser.add_argument("--wt_override", action="store_true", help="When no wt condi
                                                                "Phred scores will be adjusted based on the first replicate")
 parser.add_argument("--calibratePhredWT", action="store_true", help="When this parameter is provided, use wt to calibrate phred scores")
 parser.add_argument("--calibratePhredPhix", action="store_true", help="When this parameter is provided, use phix alignments to calibrate phred scores")
+parser.add_argument("--errorOverride", action="store_true", help="When this parameter is provided, use the observed error probability instead of max(PHRED specification, observed error)")
 parser.add_argument("--resubmit", action="store_true", help="For a finished run, batch resubmit failed scripts (if any)")
 parser.add_argument("--version", help="print version and exit")
 args = parser.parse_args()

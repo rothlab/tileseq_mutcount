@@ -15,20 +15,21 @@ pd.options.mode.chained_assignment = None  # default='warn'
 class MutParser(object):
 
     def __init__(self, row, full_seq, cds_seq, seq_lookup, tile_s, tile_e, post_prob_cutoff, logging, mut_rate, base,
-                 posteriorQC, adjusted_er):
+                 posteriorQC, error_override, adjusted_er):
         """
-        row: input row includes both reads from sam file
-        full_seq: full sequence (including cds and padding sequence)
-        cds_seq: coding sequence (includes stop codon)
-        seq_lookup: df contains coding sequences and protein sequence
-        tile_s: tile start
-        tile_e: tile end
-        post_prob_cutoff:
-        logging:
-        mut_rate:
-        base:
-        posterorQC:
-        adjusted_er:
+        @param row: input row includes both reads from sam file
+        @param full_seq: full sequence (including cds and padding sequence)
+        @param cds_seq: coding sequence (includes stop codon)
+        @param seq_lookup: df contains coding sequences and protein sequence
+        @param tile_s: tile start
+        @param tile_e: tile end
+        @param post_prob_cutoff:
+        @param logging:
+        @param mut_rate: mut rate defined by user
+        @param base:
+        @param posterorQC: boolean, if posterior QC required
+        @param error_override: boolean, if error probabilities should be obtained from observed error
+        @param adjusted_er:
         """
 
         self._seq = Seq(full_seq["seq"].values.item())
@@ -52,7 +53,8 @@ class MutParser(object):
         self._base = base
         self._posteriorQC = posteriorQC
         
-        # if we are adjusting phred scores 
+        # if we are adjusting phred scores
+        self._error_override = error_override 
         self._adjusted_er = adjusted_er
 
     def _get_seq(self):
@@ -171,7 +173,7 @@ class MutParser(object):
         # and get posterior
         pos_df, all_df, clustered_r1, clustered_r2 = posterior.cluster(d, self._r1_qual, self._r2_qual, map_pos_r1,
                                                                  map_pos_r2, self._mutrate, self._cutoff, self._base,
-                                                                       self._posteriorQC, self._adjusted_er)
+                                                                       self._posteriorQC, self._error_override, self._adjusted_er)
         final_mut = list(set(pos_df.m.tolist()))
         final_mut.sort()
         if final_mut != []:
