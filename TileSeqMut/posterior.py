@@ -355,7 +355,12 @@ def bayesian_variant_call(basecall, qual, wt, mut_rate, base, clusterSize, error
                 log_odd += (math.log(phred[j]) - math.log(3) - math.log((1/3) -(phred[j]/9)))
         # print(log_odd)
         # print(basecall)
-        logit_value = math.exp(log_odd) / (1+math.exp(log_odd))
+        if log_odd > 700: 
+            logit_value = 1
+        elif log_odd < -700:
+            logit_value = 0
+        else: 
+            logit_value = math.exp(log_odd) / (1+math.exp(log_odd))
         post_p.append(logit_value)
 
     prob = dict(zip(nt, post_p))
