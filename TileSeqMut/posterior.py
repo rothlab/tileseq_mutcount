@@ -28,14 +28,14 @@ def cluster(mut_cluster: dict, r1_qual: str, r2_qual: str, r1_mappos: dict,
     @param adjustthred: list with path to phred calibration files for R1 and R2
     """
     if posteriorQC:
-        pos_df, all_df, clustered_r1_mut, clustered_r2_mut = call_prob_withposterior(mut_cluster, r1_mappos,
+        pos_df, wt_df, all_df, clustered_r1_mut, clustered_r2_mut = call_prob_withposterior(mut_cluster, r1_mappos,
                                                                                      r2_mappos, r1_qual, r2_qual,
                                                                                      mut_rate, base, cut_off, error_override, adjustthred)
     else:
-        pos_df, all_df, clustered_r1_mut, clustered_r2_mut = call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual,
+        pos_df, wt_df, all_df, clustered_r1_mut, clustered_r2_mut = call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual,
                                                                        r2_qual, mut_rate, base, cut_off, error_override, adjustthred)
 
-    return pos_df, all_df, clustered_r1_mut, clustered_r2_mut
+    return pos_df, wt_df, all_df, clustered_r1_mut, clustered_r2_mut
 
 
 def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, base, cut_off, error_override, adjustthred):
@@ -54,6 +54,7 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
     """
 
     pos_prob = {"m": [], "prob": [], "read": []}
+    wt_calls = {"m": [], "read": []} # to store confident WT calls
 
     for c in mut_cluster.keys():
         mutcall = mut_cluster[c]
@@ -79,6 +80,12 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
                     pos_prob["m"].append(row["m_r2"])
                     pos_prob["prob"].append(pos[row["alt_r2"]])
                     pos_prob["read"].append("r2")
+
+                # if posterior for WT base is greater than cutoff AND greater than alt base
+                elif pos[row["ref_r2"]] > cut_off and pos[row["alt_r2"]] < pos[row["ref_r2"]]:
+                    wt_calls["m"].append(row["m_r2"])
+                    wt_calls["read"].append("r2")
+
             # if r1 is not null
             elif (pd.isnull(row["m_r2"]) or row["alt_r2"] == "N") and not pd.isnull(row["ref_r1"]):
 
@@ -96,6 +103,11 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
                     pos_prob["m"].append(row["m_r1"])
                     pos_prob["prob"].append(pos[row["alt_r1"]])
                     pos_prob["read"].append("r1")
+
+                # if posterior for WT base is greater than cutoff AND greater than alt base 
+                elif pos[row["ref_r1"]] > cut_off and pos[row["alt_r1"]] < pos[row["ref_r1"]]:
+                    wt_calls["m"].append(row["m_r1"])
+                    wt_calls["read"].append("r1")
 
             elif (not pd.isnull(row["m_r2"])) and (not pd.isnull(row["ref_r1"])):
 
@@ -119,8 +131,15 @@ def call_prob(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, bas
                     pos_prob["m"].append(row["m_r1"])
                     pos_prob["prob"].append((pos[row["alt_r1"]], pos[row["alt_r2"]]))
                     pos_prob["read"].append(("r1", "r2"))
+
+                # if posterior for WT base is greater than cutoff AND greater than alt base
+                elif pos[row["ref_r1"]] > max(pos[row["alt_r1"]], pos[row["alt_r2"]]) and pos[row["ref_r1"]] > cut_off:
+                    wt_calls["m"].append(row["m_r1"])
+                    wt_calls["read"].append("r1")
+
     pos_df = pd.DataFrame(pos_prob)
-    return pos_df, pd.DataFrame({}), pd.DataFrame({}), pd.DataFrame({})
+    wt_df = pd.DataFrame(wt_calls)
+    return pos_df, wt_df, pd.DataFrame({}), pd.DataFrame({}), pd.DataFrame({})
 
 
 def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual, mut_rate, base, cut_off, error_override, adjustthred):
@@ -140,6 +159,7 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
 
     pos_prob = {"m": [], "prob": [], "read": []}
     all_prob = {"m": [], "prob": [], "read": [], "pass": []}
+    wt_prob = {"m": [], "read": []} # to store confident WT calls
 
     # this is used to record 2/3nt changes on r1 or r2
     clustered_r1_mut = [pd.DataFrame({"m": [], "prob": [], "read": []})]
@@ -193,6 +213,10 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
                     pos_prob["read"].append("r2")
                 else:
                     all_prob["pass"].append(-1)
+                    # if posterior for WT base is greater than cutoff AND greater than alt base
+                    if pos[row["ref_r2"]] > cut_off and pos[row["alt_r2"]] <= pos[row["ref_r2"]]:
+                        wt_prob["m"].append(row["m_r2"])
+                        wt_prob["read"].append("r2")
 
                 r = "r2"
 
@@ -200,11 +224,14 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
 
                 if r2_mappos.get(int(row["pos"])) is None:
                     continue
-                # get R1 wt qual with map pos and qual str
+
+                # get R2 wt qual with map pos and qual str
                 r2_qual_base = r2_qual[r2_mappos[int(row["pos"])]]
 
                 pos = bayesian_variant_call([row["alt_r1"], row["ref_r1"]], [row["qual_r1"], r2_qual_base],
                                             row["ref_r1"], mut_rate, base, c_size, error_override, adjustthred)
+
+                # add this information to all prob df
                 all_prob["m"].append(row["m_r1"])
                 all_prob["prob"].append(pos[row["alt_r1"]])
                 all_prob["read"].append("r1")
@@ -223,8 +250,13 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
                     pos_prob["m"].append(row["m_r1"])
                     pos_prob["prob"].append(pos[row["alt_r1"]])
                     pos_prob["read"].append("r1")
+
                 else:
                     all_prob["pass"].append(-1)
+                    # if posterior for WT base is greater than cutoff AND greater than alt base
+                    if pos[row["ref_r1"]] > cut_off and pos[row["alt_r1"]] <= pos[row["ref_r1"]]:
+                        wt_prob["m"].append(row["m_r1"])
+                        wt_prob["read"].append("r1")
                 r = "r1"
 
             elif (not pd.isnull(row["m_r2"])) and (not pd.isnull(row["ref_r1"])):
@@ -232,6 +264,7 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
                 basecall = [row["alt_r1"], row["alt_r2"]]
                 qual = [row["qual_r1"], row["qual_r2"]]
                 pos = bayesian_variant_call(basecall, qual, row["ref_r1"], mut_rate, base, c_size, error_override, adjustthred)
+                # add this information to all prob df
                 all_prob["m"].append(row["m_r1"])
                 all_prob["prob"].append((pos[row["alt_r1"]], pos[row["alt_r2"]]))
                 all_prob["read"].append(("r1", "r2"))
@@ -271,6 +304,11 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
                     pos_prob["prob"].append((pos[row["alt_r1"]], pos[row["alt_r2"]]))
                     pos_prob["read"].append(("r1", "r2"))
 
+                # if posterior for WT base is greater than cutoff AND greater than alt base
+                elif pos[row["ref_r1"]] > max(pos[row["alt_r1"]], pos[row["alt_r2"]]) and pos[row["ref_r1"]] > cut_off:
+                    wt_prob["m"].append(row["m_r1"])
+                    wt_prob["read"].append(("r1"))
+
             # check tmp prob df
             # if number of mutations passed on r1 or r2 greater than 1
             # output mutations, label them r1 and r2, also assign them to the same cluster
@@ -284,14 +322,16 @@ def call_prob_withposterior(mut_cluster, r1_mappos, r2_mappos, r1_qual, r2_qual,
 
     # print(pos_prob)
     pos_df = pd.DataFrame(pos_prob)
+    wt_df = pd.DataFrame(wt_prob)
     all_df = pd.DataFrame(all_prob)
     clustered_r1_mut = pd.concat(clustered_r1_mut)
     clustered_r2_mut = pd.concat(clustered_r2_mut)
-    return pos_df, all_df, clustered_r1_mut, clustered_r2_mut
+    return pos_df, wt_df, all_df, clustered_r1_mut, clustered_r2_mut
 
 
 def bayesian_variant_call(basecall, qual, wt, mut_rate, base, clusterSize, error_override, adjustthred):
     """
+    Return a dict where the keys are bases and the values are posterior probabilities for that base.
     @param basecall: list of base calls (i.e R1 -> A R2 -> C :  ["A", "C"])
     @param phred: phred score for the base calls (in letters) ["!", "J"]
     @param wt: wild type base
@@ -364,9 +404,9 @@ def bayesian_variant_call(basecall, qual, wt, mut_rate, base, clusterSize, error
         post_p.append(logit_value)
 
     prob = dict(zip(nt, post_p))
-    output = dict(zip(basecall, [prob.get(base) for base in basecall]))
+    #output = dict(zip(basecall, [prob.get(base) for base in basecall]))
     #print(f"output: {output}")
-    return output
+    return prob
 
 
 # if __name__ == "__main__":
