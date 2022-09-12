@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.7
 
-#  What does this script do?
+# What does this script do?
 # This script takes a pair of read (R1 and R2) in the format of dataframe row
 # and call mutaitons based on the reads
 
@@ -171,11 +171,24 @@ class MutParser(object):
         d = dict(tuple(merged_df.groupby(merged_df['pos'].diff().gt(n).cumsum())))
         # analyze the dictionary of clusters
         # and get posterior
-        pos_df, all_df, clustered_r1, clustered_r2 = posterior.cluster(d, self._r1_qual, self._r2_qual, map_pos_r1,
+        pos_df, wt_df, all_df, clustered_r1, clustered_r2 = posterior.cluster(d, self._r1_qual, self._r2_qual, map_pos_r1,
                                                                  map_pos_r2, self._mutrate, self._cutoff, self._base,
                                                                        self._posteriorQC, self._error_override, self._adjusted_er)
         final_mut = list(set(pos_df.m.tolist()))
         final_mut.sort()
+        wt_calls = list(set(wt_df.m.tolist()))
+        wt_calls.sort()
+
+    # create wt_df to store positions where WT call passed filter cut-off
+        if wt_calls != []:
+            wt_df = pd.DataFrame([sub.split("|") for sub in wt_calls])
+            wt_df = wt_df.rename(columns=str).rename(columns={"0": "pos", "1": "wt_passed"})
+            wt_df = wt_df[["pos", "wt_passed"]]
+            wt_df["pos"] = wt_df["pos"].astype(int)
+            wt_df["pos"] = wt_df["pos"] - self._start_pos + 1
+        else:
+            wt_df = pd.DataFrame(columns=['pos', 'wt_passed'])
+
         if final_mut != []:
             final_df = pd.DataFrame([sub.split("|") for sub in final_mut])
             # give the position col a name
@@ -183,13 +196,21 @@ class MutParser(object):
             final_df = final_df[["pos", "passed"]]
             final_df["pos"] = final_df["pos"].astype(int)
             final_df["pos"] = final_df["pos"] - self._start_pos + 1
+
             # merge final df with track df to see how many mutations passed filter on each/both reads
             merged_track_df = pd.merge(track_df, final_df, how="left", on="pos")
+            # merge final df to see how many mutation could confidently be called WT
+            merged_track_df = pd.merge(merged_track_df, wt_df, how="left", on="pos")
+
             merged_track_df["passed"] = merged_track_df["passed"].where(~merged_track_df["passed"].notna(), 1)
             merged_track_df["passed"] = merged_track_df["passed"].fillna(0)
+            merged_track_df["wt_passed"] = merged_track_df["wt_passed"].where(~merged_track_df["wt_passed"].notna(), 1)
+            merged_track_df["wt_passed"] = merged_track_df["wt_passed"].fillna(0)
         else:
             merged_track_df = track_df
             merged_track_df["passed"] = 0
+            merged_track_df["wt_passed"] = 0
+
         hgvs_r1_clusters, outside_mut_r1 = [], []
         hgvs_r2_clusters, outside_mut_r2 = [], []
         if not clustered_r1.empty:

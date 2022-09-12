@@ -114,9 +114,14 @@ class readSam(object):
             output_csv.close()
 
         # build a df for tracking how many reads passed filter at certain position of the read 
-        # df contains ["pos", "m_r1", "m_r2", "passed"] columns
-        # positions referes to all the nt positions in this tile 
-        self._track_reads = pd.DataFrame({}, columns=["pos", "m_r1", "m_r2", "m_both", "passed"])
+        # df contains ["pos", "m_r1", "m_r2", "passed", "wt_passed"] columns
+        # "pos" refers to all the nt positions in this tile 
+        # "m_r1" refers to how many times the mutation was seen r1 
+        # "m_r2" refers to how many times the mutation was seen r2 
+        # "m_both" refers to how many times the mutation was seen in both r1 and r2 
+        # "passed" refers to how many mut calls passed the filter
+        # "wt_passed" refers to how many WT calls passed the filter
+        self._track_reads = pd.DataFrame({}, columns=["pos", "m_r1", "m_r2", "m_both", "passed", "wt_passed"])
         
         self._track_reads["pos"] = range(self._tile_begins, self._tile_ends+1)
         self._track_reads = self._track_reads.set_index("pos")
