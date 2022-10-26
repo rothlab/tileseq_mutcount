@@ -198,7 +198,7 @@ class fastq2counts(object):
 
         self._log.info(f"Total jobs submitted: {len(job_list)}")
         if self._args.environment == 'GALEN':
-            finished = cluster.parse_jobs_galen(job_list, self._logging.getLogger("track.jobs"))
+            finished = cluster.parse_jobs_galen(job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
         else:
             finished = cluster.parse_jobs(job_list, self._args.environment, self._logging.getLogger("track.jobs"))  #
 
@@ -300,7 +300,7 @@ class fastq2counts(object):
         self._log.debug(f"All jobs: {jobs}")
         self._log.info(f"Total jobs running: {len(job_list)}")
         if self._args.environment == 'GALEN':
-            finished = cluster.parse_jobs_galen(job_list, self._logging.getLogger("track.jobs"))
+            finished = cluster.parse_jobs_galen(job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
         else:
             finished = cluster.parse_jobs(job_list, self._args.environment, self._logging.getLogger("track.jobs"))
 
@@ -313,9 +313,9 @@ class fastq2counts(object):
         # submit job with main.py -r1 and -r2
         # run main.py with -r1 and -r2
         cmd = f"tileseq_mut -n {self._args.name} -r1 {self._r1} -r2 {self._r2} -o {self._output} -p" \
-                  f" {self._param_json} --skip_alignment -log {self._args.log_level} -env {self._args.environment} -at {self._args.at} -mt {self._args.mt} -c {self._args.c} " 
+                  f" {self._param_json} --skip_alignment -log {self._args.log_level} -env {self._args.environment} -at {self._args.at} -mt {self._args.mt} -c {self._args.c} --logger_time {self._args.logger_time}" 
         if self._args.sr_Override:
-            cmd = cmd + "-override "
+            cmd = cmd + "--sr_Override "
 
         if self._args.wt_override:
             cmd = cmd + "--wt_override "
@@ -327,7 +327,7 @@ class fastq2counts(object):
             cmd = cmd + "--calibratePhredWT "
 
         if self._args.errorOverride:
-            cmd = cmd + "--errorOverride"
+            cmd = cmd + "--errorOverride "
 
         if self._args.environment == "BC2" or self._args.environment == "BC" or self._args.environment == "DC":
             logging.info("Submitting mutation counts jobs....")
@@ -681,6 +681,7 @@ if __name__ == "__main__":
     parser.add_argument("--errorOverride", action="store_true", help="When this parameter is provided, use the observed error probability instead of max(PHRED specification, observed error)")
     parser.add_argument("--resubmit", action="store_true", help="For a finished run, batch resubmit failed scripts ("
                                                                 "if any)")
+    parser.add_argument("--logger_time", help="Time (in seconds) to wait before checking jobs status", default=300)
     args = parser.parse_args()
     args.environment = args.environment.upper()
 
