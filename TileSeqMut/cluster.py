@@ -276,12 +276,13 @@ def parse_jobs(job_list, env, logger):
             qstat_err = job.stderr.decode("utf-8", errors="replace")
 
 
-def parse_jobs_galen(job_list, logger):
+def parse_jobs_galen(job_list, sleep_time, logger):
     """
     Galen uses slurm scheduler, different from BC and DC
     return true if all the jobs in job list finished
     else wait for 10 mins and return how man jobs are running and queued
     job_list: list of job ids
+    time: time (in seconds) to wait before checking jobs status
     logger: logging object
     """
     
@@ -326,7 +327,7 @@ def parse_jobs_galen(job_list, logger):
             return
 
         #check in 10 mins
-        time.sleep(600)
+        time.sleep(int(sleep_time))
         cmd = "squeue -u $USER -j {}".format(",".join(job_list))
         job = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # get status of remaining jobs from job_list
         squeue_output = job.stdout.read().decode("utf-8", errors="replace")
