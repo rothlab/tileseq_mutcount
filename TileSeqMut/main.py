@@ -313,7 +313,7 @@ class fastq2counts(object):
         # submit job with main.py -r1 and -r2
         # run main.py with -r1 and -r2
         cmd = f"tileseq_mut -n {self._args.name} -r1 {self._r1} -r2 {self._r2} -o {self._output} -p" \
-                  f" {self._param_json} --skip_alignment -log {self._args.log_level} -env {self._args.environment} -at {self._args.at} -mt {self._args.mt} -c {self._args.c} --logger_time {self._args.logger_time}" 
+                  f" {self._param_json} --skip_alignment -log {self._args.log_level} -env {self._args.environment} -at {self._args.at} -mt {self._args.mt} -c {self._args.c} --logger_time {self._args.logger_time} " 
         if self._args.sr_Override:
             cmd = cmd + "--sr_Override "
 
