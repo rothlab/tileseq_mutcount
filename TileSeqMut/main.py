@@ -121,7 +121,16 @@ class fastq2counts(object):
             ID = os.path.basename(r1).split("_")[0]
             if ("_R1_" in r1) and (ID in self._sample_names):
                     r2 = r1.replace("_R1_", "_R2_")
-                    fastq_map.append([r1,r2])
+                    if os.path.exists(r1) and os.path.exists(r2):
+                        fastq_map.append([r1,r2])
+                    elif not os.path.exists(r2):
+                        self._log.error(f"R2 Fastq file not found for sample {ID}.")
+                        raise FileNotFoundError()
+        for r2 in self._fastq_list:
+            if ("_R2_" in r2) and not (any(r2 in fastq_map_pair for fastq_map_pair in fastq_map)):
+                ID = os.path.basename(r2).split("_")[0]
+                self._log.error(f"R1 Fastq file not found for sample {ID}.")
+                raise FileNotFoundError()
 
         # make folder to store alignment sam files
         sam_output = os.path.join(self._output, "sam_files/")
