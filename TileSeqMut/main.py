@@ -126,11 +126,13 @@ class fastq2counts(object):
                     elif not os.path.exists(r2):
                         self._log.error(f"R2 Fastq file not found for sample {ID}.")
                         raise FileNotFoundError()
+        # check that every R2 file has a R1 file mapped to it (in case an R1 file may be missing/misnamed)                
         for r2 in self._fastq_list:
             if ("_R2_" in r2) and not (any(r2 in fastq_map_pair for fastq_map_pair in fastq_map)):
                 ID = os.path.basename(r2).split("_")[0]
-                self._log.error(f"R1 Fastq file not found for sample {ID}.")
-                raise FileNotFoundError()
+                if ID in self._sample_names: # check whether R2 file is listed on parameter sheet
+                    self._log.error(f"R1 Fastq file not found for sample {ID}.")
+                    raise FileNotFoundError()
 
         # make folder to store alignment sam files
         sam_output = os.path.join(self._output, "sam_files/")
