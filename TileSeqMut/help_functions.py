@@ -26,7 +26,7 @@ def parse_json(json_file):
         project = data["project"] # project name
         seq = pd.DataFrame(data["template"], index=[0]) # sequence
         cds_seq = seq.seq[0]
-        cds_seq = cds_seq[int(seq.cds_start)-1: int(seq.cds_end)]
+        cds_seq = cds_seq[int(seq.cds_start.iloc[0])-1: int(seq.cds_end.iloc[0])]
         # create dictionary to map tile/region # to start,end positions
         try:
             tile_map = pd.DataFrame(data["tiles"])
