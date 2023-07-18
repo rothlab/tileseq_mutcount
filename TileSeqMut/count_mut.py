@@ -59,7 +59,7 @@ class readSam(object):
         # for example, mincover=0.9 means 90 percent of the tile needs to be covered
         min_cover = self._var["minCover"]
         self._min_map_len = math.ceil(self._tile_len * float(min_cover))
-        self._cds_start = self._seq.cds_start
+        self._cds_start = self._seq.cds_start.iloc[0]
 
         # get sample specific info
         self._sample_condition = self._sample_info["Condition"].values[0]
