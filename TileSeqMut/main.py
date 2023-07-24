@@ -188,7 +188,7 @@ class fastq2counts(object):
             # the output log (bowtie log) would be in the same dir
             logging.info("Writing sh files for alignment (GALEN)")
             sam_df, job_list = cluster.alignment_sh_galen(fastq_map, self._project, self._seq.seq.values.item(), ref_path,
-                                            sam_output, sh_output, self._args.at, self._log, rc)
+                                            sam_output, sh_output, self._args.at, self._log, rc, self._args.blacklist)
             logging.info("Alignment jobs are submitted to GALEN..")
 
         elif self._args.environment == "BC2" or self._args.environment == "BC" or self._args.environment == "DC":

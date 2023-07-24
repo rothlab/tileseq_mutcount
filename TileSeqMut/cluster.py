@@ -44,7 +44,7 @@ def alignment_sh_guru(fastq_map, ref_name, ref_seq, ref_path, sam_path, ds_sam_p
         os.system(sub_cmd)
 
 
-def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_output, at, logging, rc):
+def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_output, at, logging, rc, blacklist):
     """
     fastq_map: df contains paths to fastq files and downsamled fastq files
     ref_name: name for the reference sequence (same as project name)
@@ -80,15 +80,15 @@ def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_outp
 
         if "Undetermined" in sample_name: # phix takes longer to align
             time_request = f"36:00:00"
-            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=5G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
-                 f"--error={sam_log_f}-%j.log\n#SBATCH --output={sam_log_f}-%j.log\n"
+            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+                 f"--error={sam_log_f}-%j.log\n#SBATCH --exclude={blacklist} --output={sam_log_f}-%j.log\n"
             # when align undetermined fastq files to phix, we consider reads in both direction, rc = True
             r1_sam, r2_sam, log_file = alignment.align_main(phix, row["R1"], row["R2"], sam_path, shfile, rc=True,
                                                             header=header)
         else:
             time_request = f"0{at}:00:00"
-            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=5G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
-                 f"--error={sam_log_f}-%j.log\n#SBATCH --output={sam_log_f}-%j.log\n"
+            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+                 f"--error={sam_log_f}-%j.log\n#SBATCH --exclude={blacklist} --output={sam_log_f}-%j.log\n"
             r1_sam, r2_sam, log_file = alignment.align_main(ref, row["R1"], row["R2"], sam_path, shfile, rc=rc, header=header)
 
         row["r1_sam"] = r1_sam
