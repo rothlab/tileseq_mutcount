@@ -26,13 +26,13 @@ with open("README.md", "r") as fh:
 
 setup(
     name="TileSeqMut",
-    version="0.6.942",
+    version="0.6.944",
     author="ROUJIA LI",
     author_email="roujia.li@mail.utoronto.ca",
     description="Analysis scriptsTileSeqMut for TileSeq sequencing data",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/RyogaLi/tilseq_mutcount",
+    url="https://github.com/rothlab/tileseq_mutcount",
     package_data={'TileSeqMut': ['data/*.fasta', "*.R", "*.r"]},
     scripts=['bin/tileseq_mut', 'bin/mergeRuns', 'bin/posterior_QC', 'bin/random_ds', 'bin/makePRC'],
 	# For a list of valid classifiers, see https://pypi.org/classifiers/
