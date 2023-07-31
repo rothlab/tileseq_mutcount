@@ -182,7 +182,7 @@ def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores):
     log_f = os.path.join(sh_output_dir, f"Mut_count_{sample_name}")
     time_request = f"{mt}:00:00"
 
-    header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+    header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --job-name=PTM{sample_name}\n#SBATCH " \
              f"--cpus-per-task={cores}\n#SBATCH --error={log_f}-%j.log\n#SBATCH --mem={mm}G\n#SBATCH " \
              f"--output={log_f}-%j.log\n"
 
