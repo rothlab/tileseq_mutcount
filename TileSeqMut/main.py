@@ -353,7 +353,7 @@ class fastq2counts(object):
             logging.info("Submitting mutation counts jobs to GALEN...")
             # (sample_name, cmd, mt, sh_output_dir, logger)
             job_id = cluster.mut_count_sh_galen(sample, cmd, self._args.mt, self._args.mm, sh_output, self._log,
-                                                self._args.c)  # this
+                                                self._args.c, self._args.blacklist)  # this
         else:
             raise ValueError("Wrong environment")
 
