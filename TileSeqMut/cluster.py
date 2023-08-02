@@ -44,7 +44,7 @@ def alignment_sh_guru(fastq_map, ref_name, ref_seq, ref_path, sam_path, ds_sam_p
         os.system(sub_cmd)
 
 
-def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_output, at, logging, rc):
+def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_output, at, logging, rc, blacklist):
     """
     fastq_map: df contains paths to fastq files and downsamled fastq files
     ref_name: name for the reference sequence (same as project name)
@@ -64,6 +64,11 @@ def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_outp
     ref = alignment.make_ref(ref_name, ref_seq, ref_path)
     phix = alignment.make_ref("phix", ref_seq, ref_path)
 
+    if blacklist != "": 
+        blacklistArg = f"#SBATCH --exclude={blacklist}\n"
+    else:
+        blacklistArg = ""
+
     # store sam paths
     fastq_map = pd.concat([fastq_map, pd.DataFrame(columns=["r1_sam", "r2_sam"])])
     all_job_id = []
@@ -80,15 +85,15 @@ def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_outp
 
         if "Undetermined" in sample_name: # phix takes longer to align
             time_request = f"36:00:00"
-            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=5G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
-                 f"--error={sam_log_f}-%j.log\n#SBATCH --output={sam_log_f}-%j.log\n"
+            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+                 f"--error={sam_log_f}-%j.log\n{blacklistArg}#SBATCH --output={sam_log_f}-%j.log\n"
             # when align undetermined fastq files to phix, we consider reads in both direction, rc = True
             r1_sam, r2_sam, log_file = alignment.align_main(phix, row["R1"], row["R2"], sam_path, shfile, rc=True,
                                                             header=header)
         else:
             time_request = f"0{at}:00:00"
-            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=5G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
-                 f"--error={sam_log_f}-%j.log\n#SBATCH --output={sam_log_f}-%j.log\n"
+            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+                 f"--error={sam_log_f}-%j.log\n{blacklistArg}#SBATCH --output={sam_log_f}-%j.log\n"
             r1_sam, r2_sam, log_file = alignment.align_main(ref, row["R1"], row["R2"], sam_path, shfile, rc=rc, header=header)
 
         row["r1_sam"] = r1_sam
@@ -167,7 +172,7 @@ def mut_count_sh_ccbr(sample_name, cmd, mt, mm, sh_output_dir, logger, cores, cl
     return job_id
 
 
-def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores):
+def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores, blacklist):
     """
     Submit mutation count jobs to DC
     """
@@ -177,9 +182,15 @@ def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores):
     log_f = os.path.join(sh_output_dir, f"Mut_count_{sample_name}")
     time_request = f"{mt}:00:00"
 
-    header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+    if blacklist != "": 
+        blacklistArg = f"#SBATCH --exclude={blacklist}\n"
+    else:
+        blacklistArg = ""
+
+
+    header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --job-name=PTM{sample_name}\n#SBATCH " \
              f"--cpus-per-task={cores}\n#SBATCH --error={log_f}-%j.log\n#SBATCH --mem={mm}G\n#SBATCH " \
-             f"--output={log_f}-%j.log\n"
+             f"--output={log_f}-%j.log\n{blacklistArg}"
 
     with open(shfile, "w") as sh:
         sh.write(header)

@@ -67,7 +67,7 @@ class readSam(object):
         self._sample_rep = int(self._sample_info["Replicate"].values[0])
         # seq_lookup is a dataframe with the following columns:
         # temp_pos, cds, dna_pos, protein, protein_pos
-        self._seq_lookup = help_functions.build_lookup(self._cds_start.values.item(), self._seq.cds_end.values.item(), self._cds_seq)
+        self._seq_lookup = help_functions.build_lookup(self._cds_start, self._seq.cds_end.iloc[0], self._cds_seq)
 
         # path for the output files
         self._sample_counts_f = os.path.join(self._output_counts_dir,f"counts_sample_{self._sample_id}.csv")
