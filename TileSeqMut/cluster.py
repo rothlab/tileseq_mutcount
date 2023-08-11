@@ -301,6 +301,7 @@ def parse_jobs_galen(job_list, sleep_time, logger):
     job = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # get status of jobs from job_list
     squeue_output = job.stdout.read().decode("utf-8", errors="replace") 
     squeue_error = job.stderr.read().decode("utf-8", errors="replace")
+    #FIXME: Zombie process unless using job.communicate(): https://stackoverflow.com/questions/2760652/how-to-kill-or-avoid-zombie-processes-with-subprocess-module
     logger.debug(squeue_output)
     logger.debug(squeue_error)
 
