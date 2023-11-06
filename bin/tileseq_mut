@@ -57,6 +57,7 @@ parser.add_argument("--errorOverride", action="store_true", help="When this para
 parser.add_argument("--resubmit", action="store_true", help="For a finished run, batch resubmit failed scripts (if any)")
 parser.add_argument("--logger_time", help="Time (in seconds) to wait before checking jobs status", default=300)
 parser.add_argument("--blacklist", help="Comma-separated list of cluster nodes to exclude from submissions", default="")
+parser.add_argument("--queue", help="A special queue to submit jobs to (e.g. 'guru')", default="")
 parser.add_argument("--version", help="print version and exit")
 args = parser.parse_args()
 # print("TileSeqMut release 0.2.1: Supports multiprocess")
