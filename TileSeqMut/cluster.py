@@ -346,7 +346,7 @@ def parse_jobs_galen(job_list, sleep_time, logger):
 
         job_list = running_jobs + queued_jobs + suspended_jobs + stuck_jobs
         if not len(job_list):
-            return
+            return True
 
         #check in 10 mins
         time.sleep(int(sleep_time))
