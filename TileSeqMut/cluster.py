@@ -2,9 +2,11 @@
 
 import pandas as pd
 import os
+import glob
 import re
 import subprocess
 import time
+import numpy as np
 
 # other modules
 from TileSeqMut import alignment
@@ -90,14 +92,14 @@ def alignment_sh_galen(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_outp
 
         if "Undetermined" in sample_name: # phix takes longer to align
             time_request = f"36:00:00"
-            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name=aln_{sample_name}\n#SBATCH " \
                  f"--error={sam_log_f}-%j.log\n{blacklistArg}{queueArg}#SBATCH --output={sam_log_f}-%j.log\n"
             # when align undetermined fastq files to phix, we consider reads in both direction, rc = True
             r1_sam, r2_sam, log_file = alignment.align_main(phix, row["R1"], row["R2"], sam_path, shfile, rc=True,
                                                             header=header)
         else:
             time_request = f"0{at}:00:00"
-            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name={sample_name}\n#SBATCH " \
+            header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --mem=2G\n#SBATCH --job-name=aln_{sample_name}\n#SBATCH " \
                  f"--error={sam_log_f}-%j.log\n{blacklistArg}{queueArg}#SBATCH --output={sam_log_f}-%j.log\n"
             r1_sam, r2_sam, log_file = alignment.align_main(ref, row["R1"], row["R2"], sam_path, shfile, rc=rc, header=header)
 
@@ -152,6 +154,7 @@ def alignment_sh_ccbr(fastq_map, ref_name, ref_seq, ref_path, sam_path, sh_outpu
     return fastq_map, all_job_id
 
 
+
 def mut_count_sh_ccbr(sample_name, cmd, mt, mm, sh_output_dir, logger, cores, cluster_name):
     """
     Submit mutation count jobs to BC
@@ -183,8 +186,10 @@ def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores, b
     """
     # go through files df and submit jobs for each pair of sam files
     # counting mutations in raw sam output files
+
     shfile = os.path.join(sh_output_dir, f"Mut_count_{sample_name}.sh")
     log_f = os.path.join(sh_output_dir, f"Mut_count_{sample_name}")
+
     time_request = f"{mt}:00:00"
 
     if blacklist != "": 
@@ -198,9 +203,14 @@ def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores, b
         queueArg = ""
 
 
-    header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --job-name=PTM{sample_name}\n#SBATCH " \
+    header = f"#!/bin/bash\n#SBATCH --time={time_request}\n#SBATCH --job-name=mtc_{sample_name}\n#SBATCH " \
              f"--cpus-per-task={cores}\n#SBATCH --error={log_f}-%j.log\n#SBATCH --mem={mm}G\n#SBATCH " \
              f"--output={log_f}-%j.log\n{blacklistArg}{queueArg}"
+    
+    # TODO: Delete existing .sh file for dropped samples and create new ones
+    
+    if os.path.isfile(shfile):
+        os.remove(shfile)
 
     with open(shfile, "w") as sh:
         sh.write(header)
@@ -216,6 +226,98 @@ def mut_count_sh_galen(sample_name, cmd, mt, mm, sh_output_dir, logger, cores, b
     logger.info(f"Sample {sample_name}: job id - {job_id}")
     return job_id.split()[-1]
 
+
+#######################################################################################################################################################################################
+
+def submit_mutcount_jobs(output_dir, param_json, sample, blacklist, sh_output, r1, r2, args, logger):
+    """
+    Make mutation counting jobs and submit for this sample
+    """
+    # submit job with main.py -r1 and -r2
+    # run main.py with -r1 and -r2
+
+    cmd = f"tileseq_mut -n {args.name} -r1 {r1} -r2 {r2} -o {output_dir} -p" \
+                f" {param_json} --skip_alignment -log {args.log_level} -env {args.environment} -at {args.at} -mt {args.mt} -c {args.c} --logger_time {args.logger_time} " 
+    if args.sr_Override:
+        cmd = cmd + "--sr_Override "
+
+    if args.wt_override:
+        cmd = cmd + "--wt_override "
+    
+    if args.calibratePhredPhix:
+        cmd = cmd + "--calibratePhredPhix "
+
+    if args.calibratePhredWT:
+        cmd = cmd + "--calibratePhredWT "
+
+    if args.errorOverride:
+        cmd = cmd + "--errorOverride "
+
+    if args.environment == "BC2" or args.environment == "BC" or args.environment == "DC":
+        logger.info("Submitting mutation counts jobs....")
+        job_id = mut_count_sh_ccbr(sample, cmd, args.mt, args.mm, sh_output, logger,
+                                            args.c, args.environment)
+    # elif :
+    #     logging.info("Submitting mutation counts jobs to DC...")
+    #     # (sample_name, cmd, mt, sh_output_dir, logger)
+    #     job_id = cluster.mut_count_sh_dc(sample, cmd, self._args.mt, self._args.mm, sh_output, self._log,
+    #                                      self._args.c)
+    elif args.environment == "GALEN":
+        logger.info("Submitting mutation counts jobs to GALEN...")
+        # (sample_name, cmd, mt, sh_output_dir, logger)
+        job_id = mut_count_sh_galen(sample, cmd, args.mt, args.mm, sh_output, logger,
+                                            args.c, blacklist, args.queue)  # this
+    else:
+        raise ValueError("Wrong environment")
+
+    return job_id
+
+
+def makejobs(output_dir, param_json, samples, blacklist, sh_output, sam_dir, args, logger):
+        """
+        For each pair of sam files in output/sam_files/
+        submit mut count job to the cluster
+        """
+        if sam_dir == "":
+            # get samples in param file
+            sam_dir = os.path.join(output_dir, "sam_files/") # read sam file from sam_file
+        # get sam files from parameter file
+        if not os.path.isdir(sam_dir):
+            logger(f"Directory: ./sam_files/ not found in {output_dir}")
+            raise ValueError()
+
+        logger.debug(f"Sam files are read from {sam_dir}")
+        job_list = []
+        for sample in samples:
+            # assume all the sam files have the same name format (id_*.sam)
+            sam_f_r1 = glob.glob(f"{sam_dir}/{sample}_*R1_*.sam")
+            sam_f_r2 = glob.glob(f"{sam_dir}/{sample}_*R2_*.sam")
+            if len(sam_f_r1) == 0 or len(sam_f_r2) == 0:
+                logger.error(f"SAM file for sample {sample} not found. Please check your parameter file")
+                raise ValueError()
+
+            else:
+                logger.info(f"Sample {sample}")
+                logger.info(f"Read1: {sam_f_r1[0]}")
+                logger.info(f"Read2: {sam_f_r2[0]}")
+                sam_id_1 = os.path.basename(sam_f_r1[0]).split("_")[0]
+                sam_id_2 = os.path.basename(sam_f_r2[0]).split("_")[0]
+                if (sam_id_1 != sample) or (sam_id_1 != sam_id_2) or (sam_id_2 != sample):
+                    logger.error("IDs in sam files don't match!")
+                r1 = sam_f_r1[0]
+                r2 = sam_f_r2[0]
+            
+            job_id = submit_mutcount_jobs(output_dir, param_json, sample, blacklist, sh_output, r1, r2, args, logger)
+            job_list.append(job_id)
+        logger.info("all samples resubmitted")
+
+
+#######################################################################################################################################################################################
+        # after resubmitting dropped jobs, track all resubmitted jobs on cluster
+        jobs = ",".join(job_list)
+        logger.debug(f"All jobs resubmitted: {jobs}")
+
+#######################################################################################################################################################################################
 
 def parse_jobs(job_list, env, logger):
     """
@@ -297,11 +399,12 @@ def parse_jobs(job_list, env, logger):
             qstat_err = job.stderr.decode("utf-8", errors="replace")
 
 
-def parse_jobs_galen(job_list, sleep_time, logger):
+def parse_jobs_galen(param_json, output_dir, sample_list, args, job_list, sleep_time, logger):
     """
     Galen uses slurm scheduler, different from BC and DC
     return true if all the jobs in job list finished
     else wait for 10 mins and return how man jobs are running and queued
+    sample_list: list of sample ids
     job_list: list of job ids
     time: time (in seconds) to wait before checking jobs status
     logger: logging object
@@ -314,6 +417,8 @@ def parse_jobs_galen(job_list, sleep_time, logger):
     #FIXME: Zombie process unless using job.communicate(): https://stackoverflow.com/questions/2760652/how-to-kill-or-avoid-zombie-processes-with-subprocess-module
     logger.debug(squeue_output)
     logger.debug(squeue_error)
+    
+    node_list = []
 
     while True:
         running_jobs, queued_jobs, completed_jobs, stuck_jobs, suspended_jobs = [], [], [], [], []
@@ -323,14 +428,20 @@ def parse_jobs_galen(job_list, sleep_time, logger):
             job_entries_df = job_entries_df.rename(columns=job_entries_df.iloc[0]).dropna()
             logger.debug(job_entries_df)
 
-            running_jobs = job_entries_df[job_entries_df["ST"] == "R"]["JOBID"].tolist() # active job IDs
-            queued_jobs = job_entries_df[job_entries_df["ST"] == "PD"]["JOBID"].tolist() # pending job IDs
-            completed_jobs = job_entries_df[job_entries_df["ST"] == "CG"]["JOBID"].tolist() # completing job IDs
-            suspended_jobs = job_entries_df[job_entries_df["ST"] == "S"]["JOBID"].tolist() # suspended job IDs
-            stuck_jobs = job_entries_df[job_entries_df["NODELIST(REASON)"].str.contains("launch failed requeued held")]["JOBID"].tolist() # stuck job IDs
+            running_jobs = list(zip(job_entries_df[job_entries_df["ST"] == "R"]["JOBID"].tolist(), job_entries_df[job_entries_df["ST"] == "R"]["NAME"].tolist()))
+            # running_jobs = job_entries_df[job_entries_df["ST"] == "R"]["JOBID"].tolist() # active job IDs
+            queued_jobs = list(zip(job_entries_df[job_entries_df["ST"] == "PD"]["JOBID"].tolist(), job_entries_df[job_entries_df["ST"] == "PD"]["NAME"].tolist()))
+            # queued_jobs = job_entries_df[job_entries_df["ST"] == "PD"]["JOBID"].tolist() # pending job IDs
+            # completed_jobs = list(zip(job_entries_df[job_entries_df["ST"] == "CG"]["JOBID"].tolist(), job_entries_df[job_entries_df["ST"] == "CG"]["NAME"].tolist()))
+            # completed_jobs = job_entries_df[job_entries_df["ST"] == "CG"]["JOBID"].tolist() # completing job IDs
+            suspended_jobs = list(zip(job_entries_df[job_entries_df["ST"] == "CG"]["JOBID"].tolist(), job_entries_df[job_entries_df["ST"] == "CG"]["NAME"].tolist()))
+            # suspended_jobs = job_entries_df[job_entries_df["ST"] == "S"]["JOBID"].tolist() # suspended job IDs
+            stuck_jobs = list(zip(job_entries_df[job_entries_df["NODELIST(REASON)"].str.contains("launch failed requeued held")]["JOBID"].tolist(), job_entries_df[job_entries_df["NODELIST(REASON)"].str.contains("launch failed requeued held")]["JOBID"].tolist()))
+            # stuck_jobs = job_entries_df[job_entries_df["NODELIST(REASON)"].str.contains("launch failed requeued held")]["JOBID"].tolist() # stuck job IDs
 
         logger.info(f"{len(queued_jobs)} jobs queued")
         logger.info(f"{len(running_jobs)} jobs running\n")
+        # logger.info(f"{len(completed_jobs)} jobs completed\n")
 
         #attempt to requeue suspended jobs
         if len(suspended_jobs):
@@ -347,9 +458,71 @@ def parse_jobs_galen(job_list, sleep_time, logger):
         job_list = running_jobs + queued_jobs + suspended_jobs + stuck_jobs
         if not len(job_list):
             return True
+        
+        job_samples_dict = {}
+        for job, name in job_list: #populate a dictionary with job ids and sample names
+            # logger.debug(f"job name: {name}")
+            job_samples_dict[job] = re.search("(\d+)", name).group(1)
+        # samples that have finished running     
+        completed_jobs = list(set(sample_list)-set(list(job_samples_dict.values()))) 
+        
+        if completed_jobs:
+            #if submitted jobs are alignment jobs
+            if re.search("^(\w+)_", job_list[0][1]).group(1) == "aln": 
+                # TODO: check the SAM directory for completed job's .SAM files
+                logger.debug("Skipping alignment resubmissions")
+            #if submitted jobs are mutcount jobs
+            elif re.search("^(\w+)_", job_list[0][1]).group(1) == "mtc": 
+                mutcount_list = glob.glob(os.path.join(output_dir, "counts_sample_*.csv"))
+                # failed_samples = []
+                all_samples_with_csv = []
+                # go through all the mut count files
+                for f in mutcount_list:
+                    m = re.search('.*counts_sample_(.+?).csv', f)
+                    # find sample ID in file name
+                    if m:
+                        sample_id = m.group(1)
+                        all_samples_with_csv.append(sample_id)
+                    else:
+                        logger.error("Sample ID not found")
+                        raise ValueError(f"Sample ID not found for {f}")
+                    # check if the file is empty
+                    # mut_n = self._checkoutput(f)
+                    # if mut_n == 0:
+                    #     failed_samples.append(sample_id)
+                # if any sample does not have a csv file generated (jobs were completed but did not generate output files)
+                dropped_samples = [i for i in completed_jobs if i not in all_samples_with_csv]
+                # failed_samples += other_missing
+                if dropped_samples:   
+                    logger.info(f"Failed samples: {dropped_samples}")
+                    logger.info("Resubmitting samples ...")
+                    env_jobs_dir = os.path.join(output_dir, "GALEN_jobs")
+                    parent_dir = os.path.abspath(os.path.join(output_dir, os.pardir))
+                    sam_dir = os.path.join(parent_dir, "sam_files")
 
+                    
+                    dropped_job_list = [job_id for job_id, sample in job_samples_dict.items() if sample in dropped_samples]
+                    
+
+                    # determine failing nodes and resubmit sample
+                    for job in dropped_job_list: 
+                        cmd = ["sacct", "-j", job, "--format=NodeList"]
+                        job = subprocess.run(cmd, shell = True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        sacct_output = job.stdout.read().decode("utf-8", errors="replace") 
+                        node_df = pd.DataFrame([i.split() for i in sacct_output.split("\n")])
+                        node_df = node_df.iloc[2:]
+                        node = node_df.iloc[0, 0]
+                        node_list.append(node)
+                    blacklist = ",".join(node_list)
+
+                    #resubmit failed jobs
+                    makejobs(output_dir, param_json, dropped_samples, blacklist, env_jobs_dir, sam_dir, args, logger)
+
+                    # finished = self._makejobs(env_jobs_dir, sam_dir, failed_samples)
+                
         #check in 10 mins
         time.sleep(int(sleep_time))
+        job_list = [job for job, name in job_list]
         cmd = "squeue -u $USER -j {}".format(",".join(job_list))
         job = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # get status of remaining jobs from job_list
         squeue_output = job.stdout.read().decode("utf-8", errors="replace")

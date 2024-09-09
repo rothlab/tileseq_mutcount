@@ -41,7 +41,7 @@ class fastq2counts(object):
         param_path: Full path to param.json file
         output_dir: Directory to save all the output files
         main_log: logging object
-        args: user inpu arguments
+        args: user input arguments
         """
         # path to this python file
         self._main_path = os.path.abspath(__file__)
@@ -209,7 +209,8 @@ class fastq2counts(object):
 
         self._log.info(f"Total jobs submitted: {len(job_list)}")
         if self._args.environment == 'GALEN':
-            finished = cluster.parse_jobs_galen(job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
+            finished = cluster.parse_jobs_galen(self._param_json, self._output, self._sample_names, self._args, job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
+                # job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
         else:
             finished = cluster.parse_jobs(job_list, self._args.environment, self._logging.getLogger("track.jobs"))  #
 
@@ -311,7 +312,8 @@ class fastq2counts(object):
         self._log.debug(f"All jobs: {jobs}")
         self._log.info(f"Total jobs running: {len(job_list)}")
         if self._args.environment == 'GALEN':
-            finished = cluster.parse_jobs_galen(job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
+            finished = cluster.parse_jobs_galen(self._param_json, self._output, self._sample_names, self._args, job_list, self._args.logger_time, self._logging.getLogger("track.jobs"))
+            # param_json, output_dir, sample_list, args, job_list, sleep_time, logger
         else:
             finished = cluster.parse_jobs(job_list, self._args.environment, self._logging.getLogger("track.jobs"))
 
@@ -382,7 +384,7 @@ class fastq2counts(object):
 
         if self._r1 != "" and self._r2 != "":
             # call functions in count_mut.py
-            # init(sam_r1, sam_r2, param, args, ouptut_dir, logger)
+            # init(sam_r1, sam_r2, param, args, output_dir, logger)
             self._mut_count()
 
         # submit jobs for mutation counting
@@ -516,7 +518,7 @@ def check(args):
     # if you don't specify --skip_alignment then you cannot provide r1 and r2 sam_files
     if not args.skip_alignment:
         if args.r1 or args.r2:
-            raise ValueError(f"Invalid paramters! Please specify --skip_alignment if you want to analyze\
+            raise ValueError(f"Invalid parameters! Please specify --skip_alignment if you want to analyze\
             one pair of sam files")
 
     # check if output dir exists
@@ -544,7 +546,7 @@ def check(args):
     elif args.param.endswith(".json"):
         param_json = args.param
     else:
-        raise ValueError("Please provide valid paramter file format (csv or json)")
+        raise ValueError("Please provide valid parameter file format (csv or json)")
 
     if not os.path.isfile(param_json):
         raise ValueError("Json file does not exist, check conversion!")
@@ -579,7 +581,7 @@ def main(args, v):
             param_path = os.path.join(args.output, param_base)
             if not os.path.isfile(param_path):
                 param_path = shutil.copy(param_json, args.output, follow_symlinks=True)
-            # set up loggingthis creates main.log in the mut_count output dir
+            # set up logging this creates main.log in the mut_count output dir
             main_log_f = os.path.join(args.output, "mutcount_main.log")
             main_log = help_functions.logginginit(args.log_level, main_log_f)
 
