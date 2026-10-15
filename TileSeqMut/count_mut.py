@@ -586,6 +586,16 @@ def write_skipped_reads(path, skipped):
     df.to_csv(path, index=False)
     return len(df)
 
+def skipped_results(row):
+    """
+    Results for a read pair that was skipped: no mutations, plus the pair's start positions and CIGARs.
+    """
+    hgvs, outside_mut, all_df = [], [], pd.DataFrame()
+    hgvs_r1_clusters, hgvs_r2_clusters = [], []
+    track_df = pd.DataFrame()
+    skipped_pair = (row["pos_start_r1"], row["cigar_r1"], row["pos_start_r2"], row["cigar_r2"])
+    return hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df, skipped_pair
+
 
 def process_wrapper(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log, mutrate, base,
                     posteriorQC, errorOverride, adjusted_er):
@@ -594,5 +604,8 @@ def process_wrapper(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual,
     """
     mut_parser = locate_mut.MutParser(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log,
                                       mutrate, base, posteriorQC, errorOverride, adjusted_er)
-    hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df = mut_parser._main()
-    return hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df
+    try:
+      hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df = mut_parser._main()
+    except locate_mut.DuplicatedMutations:
+        return skipped_results(row)
+    return hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df, None
