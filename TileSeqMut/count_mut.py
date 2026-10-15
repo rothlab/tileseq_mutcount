@@ -559,6 +559,13 @@ class readSam(object):
             self._mut_log.info(f"Posterior df saved to files ... {all_f}")
             del all_df
 
+def write_skipped_reads(path, skipped):
+    """
+    Write skipped reads to a file
+    """
+    df = pd.DataFrame(skipped, columns=["r1_start", "r1_cigar", "r2_start", "r2_cigar"])
+    df.to_csv(path, index=False)
+
 
 def process_wrapper(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log, mutrate, base,
                     posteriorQC, errorOverride, adjusted_er):
