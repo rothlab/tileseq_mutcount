@@ -329,6 +329,8 @@ class readSam(object):
         r2_popmut = 0
         off_read = 0
 
+        skipped = []  # save all the reads that were skipped due Duplicate reads, low quality, or low coverage
+
         # used to track read length for read 1 and read 2
         # this information will be written in the counts file
         read_length_r1 = {}
@@ -458,7 +460,11 @@ class readSam(object):
         # wait for all jobs to finish
         all_df = []
         for job in jobs:
-            hgvs, outside_mut, all_posterior, hgvs_r1_clusters, hgvs_r2_clusters, track_df = job.get()
+            hgvs, outside_mut, all_posterior, hgvs_r1_clusters, hgvs_r2_clusters, track_df, skipped_pair = job.get()
+            if skipped_pair is not None:
+                skipped.append(skipped_pair)
+                continue
+            
             if len(hgvs) != 0:
                 final_pairs += 1
                 if hgvs_output.get(hgvs, -1) != -1:
@@ -495,6 +501,7 @@ class readSam(object):
         # clean up
         pool.close()
         self._mut_log.info("Pool closed")
+
         # track mutations that are not within the same tile
         # track sequencing depth for each sample
         # write this information to a tmp file
@@ -537,6 +544,17 @@ class readSam(object):
         cov_file = os.path.join(self._output_counts_dir, f"coverage_{self._sample_id}.csv")
         self._track_reads.to_csv(cov_file)
 
+        # save skipped reads to a file
+        if skipped:
+          skipped_f = os.path.join(self._output_counts_dir, f"skippedreads_{self._sample_id}.csv")
+          self._mut_log.warning(f"SKIPPED_READ_PAIRS count={len(skipped)} "
+                                f"fraction={len(skipped) / max(read_pair, 1):.4%} "
+                                f"file={os.path.basename(skipped_f)}")
+          try:
+              write_skipped_reads(skipped_f, skipped)
+          except OSError:
+              self._mut_log.exception(f"Could not write {skipped_f}; main outputs are unaffected")
+
         if self._posteriorQC:
             r1_df = pd.DataFrame.from_dict(r1_pop_hgvs, orient="index")
             r1_df = r1_df.reset_index()
@@ -558,6 +576,7 @@ class readSam(object):
                 df.to_csv(all_f, mode='a', header=False, index=False)
             self._mut_log.info(f"Posterior df saved to files ... {all_f}")
             del all_df
+
 
 def write_skipped_reads(path, skipped):
     """
