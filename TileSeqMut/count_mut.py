@@ -329,7 +329,7 @@ class readSam(object):
         r2_popmut = 0
         off_read = 0
 
-        skipped = []  # save all the reads that were skipped due Duplicate reads, low quality, or low coverage
+        skipped = []  # save all the reads that were skipped due Duplicate reads
 
         # used to track read length for read 1 and read 2
         # this information will be written in the counts file
@@ -586,6 +586,7 @@ def write_skipped_reads(path, skipped):
     df.to_csv(path, index=False)
     return len(df)
 
+
 def skipped_results(row):
     """
     Results for a read pair that was skipped: no mutations, plus the pair's start positions and CIGARs.
@@ -599,13 +600,14 @@ def skipped_results(row):
 
 def process_wrapper(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log, mutrate, base,
                     posteriorQC, errorOverride, adjusted_er):
-    """
-    Wrapper function to process each line (pair of reads)
-    """
-    mut_parser = locate_mut.MutParser(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log,
-                                      mutrate, base, posteriorQC, errorOverride, adjusted_er)
-    try:
-      hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df = mut_parser._main()
-    except locate_mut.DuplicatedMutations:
-        return skipped_results(row)
-    return hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df, None
+  """
+  Wrapper function to process each line (pair of reads)
+  Returns the six results of MutParser._main() plus skipped_pair (None, or the pair's starts and CIGARs if skipped)
+  """
+  mut_parser = locate_mut.MutParser(row, seq, cds_seq, seq_lookup, tile_begins, tile_ends, qual, locate_log,
+                                    mutrate, base, posteriorQC, errorOverride, adjusted_er)
+  try:
+    hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df = mut_parser._main()
+  except locate_mut.DuplicatedMutations:
+      return skipped_results(row)
+  return hgvs, outside_mut, all_df, hgvs_r1_clusters, hgvs_r2_clusters, track_df, None
