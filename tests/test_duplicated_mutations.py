@@ -66,3 +66,13 @@ READ_ROW = {
   "pos_start_r2" : "520",
   "cigar_r2" : "30M"
 }
+
+
+def make_parser():
+  # skips __init__ 
+  # test only use parsing helpers, only needs logger
+  parser = MutParser.__new__(MutParser)
+  parser._logging = logging.getLogger("test_duplicated_mutations")
+  return parser
+
+
