@@ -76,3 +76,8 @@ def make_parser():
   return parser
 
 
+def parse(cigar, mdz, read, pos):
+  qual = "I" * len(read)
+  # no ref, setting that to None, since we don't need it for this test
+  snp, delins, _pos_map = make_parser()._parse_cigar_mdz(cigar, mdz, None, read, pos, qual)
+  return snp, delins
