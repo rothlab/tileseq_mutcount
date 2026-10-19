@@ -129,3 +129,21 @@ def test_snp_is_parsed():
    snp, delins = parse([("20", "M")], "10A9", "A" * 10 + "C" + "A" * 9, 491)
    assert snp == ["501|A|C|I"]
    assert delins == []
+
+
+### tests yet to pass, will fail if fixed ###
+@pytest.mark.xfail(strict=True, raises=DuplicatedMutations,
+                   reason="known: an insertion directly followed by a deletion shares a position key")
+def test_convert_mut_accepts_ins_then_del():
+    _, delins = parse(**INS_THEN_DEL)
+    assert len(make_parser()._convert_mut(delins, "r1")) == 5  # 1 insertion + 4 deleted bases
+
+
+@pytest.mark.xfail(strict=True, raises=DuplicatedMutations,
+                   reason="known: an insertion directly followed by a deletion shares a position key")
+def test_convert_mut_accepts_two_ins_then_del():
+    _, delins = parse(**TWO_INS_THEN_DEL)
+    assert len(make_parser()._convert_mut(delins, "r1")) == 6  # 2 insertions + 4 deleted bases
+
+
+### test count_mut.write_skipped_reads ###
