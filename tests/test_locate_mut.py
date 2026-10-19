@@ -108,3 +108,59 @@ def positions(records):
         fields = record.split("|")
         out.append((int(fields[0]), fields[2]))
     return out
+
+
+
+### tests ###
+
+class TestPositionKeys:
+    """Documents the key (position) the parser gives each insertion and deletion.
+
+    If the convention is changed on purpose, update the expected values here.
+    """
+
+    @pytest.mark.parametrize("read, expected", [
+        pytest.param(INS_THEN_DEL, [(501, "ins"), (501, "del")], id="ins_then_del_collide"),
+        pytest.param(DEL_THEN_INS, [(505, "ins"), (501, "del")], id="del_then_ins_do_not_collide"),
+        pytest.param(NINE_BASE, [(500, "ins"), (500, "del")], id="nine_base_ins_then_del_collide"),
+        pytest.param(TWO_INS_THEN_DEL, [(493, "ins"), (501, "ins"), (501, "del")],
+                     id="only_the_second_insertion_collides"),
+        pytest.param(REPORTED_READ, [(126, "ins"), (126, "del")], id="reported_read_collides"),
+    ])
+    def test_position_keys(self, read, expected):
+        assert positions(parse(read)[1]) == expected
+
+
+class TestParsingStillWorks:
+    """Reads with a single kind of event must keep working."""
+
+    def test_isolated_insertion_converts_cleanly(self):
+        _, delins = parse(ISOLATED_INSERTION)
+        assert len(convert(delins)) == 1
+
+    def test_isolated_deletion_is_flattened_per_base(self):
+        _, delins = parse(ISOLATED_DELETION)
+        assert list(convert(delins)["pos"]) == ["501", "502", "503"]
+
+    def test_snp_is_parsed(self):
+        snp, delins = parse(SNP_ONLY)
+        assert snp == ["501|A|C|I"]
+        assert delins == []
+
+
+class TestKnownLimitation:
+    """Behavior we want but don't have yet.
+
+    These are strict xfails: once the key problem is fixed they will start passing,
+    pytest reports that as a failure, and the xfail marker should then be removed.
+    """
+
+    @pytest.mark.xfail(strict=True, raises=DuplicatedMutations,
+                       reason="known: an insertion directly followed by a deletion shares a position key")
+    @pytest.mark.parametrize("read, expected_rows", [
+        pytest.param(INS_THEN_DEL, 5, id="1_insertion_and_4_deleted_bases"),
+        pytest.param(TWO_INS_THEN_DEL, 6, id="2_insertions_and_4_deleted_bases"),
+    ])
+    def test_convert_mut_accepts_insertion_then_deletion(self, read, expected_rows):
+        _, delins = parse(read)
+        assert len(convert(delins)) == expected_rows
