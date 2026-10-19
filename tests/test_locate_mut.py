@@ -1,3 +1,4 @@
+# These tests were generated with Claude (Anthropic) and then reviewed, edited and run by the maintainers.
 """
 Tests for how MutParser (locate_mut.py) keys insertions and deletions.
 
