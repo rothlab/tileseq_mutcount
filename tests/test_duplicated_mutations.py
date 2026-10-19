@@ -81,3 +81,34 @@ def parse(cigar, mdz, read, pos):
   # no ref, setting that to None, since we don't need it for this test
   snp, delins, _pos_map = make_parser()._parse_cigar_mdz(cigar, mdz, None, read, pos, qual)
   return snp, delins
+
+
+def positions(records):
+  # indel records
+  out = []
+  for record in records:
+    fields = record.split("|")
+    pos = int(fields[0])
+    mut_type = fields[2]
+    out.append((pos, mut_type))
+  return out
+
+
+### tests global test var conventions ###
+def test_ins_then_del_share_a_position_key():
+  assert positions(parse(**INS_THEN_DEL)[1]) == [(501, "ins"), (501, "del")]
+
+def test_del_then_ins_do_not_collide():
+    assert positions(parse(**DEL_THEN_INS)[1]) == [(505, "ins"), (501, "del")]
+
+
+def test_nine_base_ins_then_del_share_a_position_key():
+    assert positions(parse(**NINE_BASE)[1]) == [(500, "ins"), (500, "del")]
+
+
+def test_two_insertions_then_deletion():
+    assert positions(parse(**TWO_INS_THEN_DEL)[1]) == [(493, "ins"), (501, "ins"), (501, "del")]
+
+
+def test_reported_read_shares_a_position_key():
+    assert positions(parse(**REPORTED_READ)[1]) == [(126, "ins"), (126, "del")]
