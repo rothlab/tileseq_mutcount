@@ -227,3 +227,138 @@ def test_process_wrapper_does_not_swallow_same_ref_and_alt(monkeypatch):
     with pytest.raises(SameRefandAlt):
         run_wrapper()
 
+
+### test count_mut.readSam.multi_core ###
+# Only pairs that are skipped, unmapped or mutation-free are used here, so the
+# per-position coverage merging at the end of the job loop is not exercised.
+HEADER_LABELS = ["#Sample", "#Raw read depth", "#Number of read pairs without mutations",
+                 "#Number of read pairs did not map to gene", "#Mutation positions outside of the tile",
+                 "#Number of reads outside of the tile", "#Final read-depth",
+                 "#Total read pairs with mutations", "#Comment", "#Comment",
+                 "#Read len for R1", "#Read len for R2"]
+
+
+class ListLogger:
+    def __init__(self):
+        self.messages = []
+
+    def _add(self, msg, *args, **kwargs):
+        self.messages.append(str(msg))
+
+    info = warning = error = debug = exception = _add
+
+
+class FakeResult:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
+class FakePool:
+    """Runs every job immediately in the calling process."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def apply_async(self, func, args):
+        return FakeResult(func(*args))
+
+    def close(self):
+        pass
+
+
+class FakeMutParser:
+    """Stands in for MutParser: reads with an insertion and a deletion raise DuplicatedMutations."""
+    def __init__(self, row, *args, **kwargs):
+        self._row = row
+
+    def _main(self):
+        cigar = self._row["cigar_r1"]
+        if "I" in cigar and "D" in cigar:
+            raise DuplicatedMutations()
+        raise AssertionError("only skipped pairs should reach the parser in these tests")
+
+
+def sam_line(name, cigar, md, pos=1, rname="ref"):
+    length = sum(int(n) for n, op in re.findall(r"(\d+)([MIDS])", cigar) if op in "MIS")
+    return f"{name}\t0\t{rname}\t{pos}\t60\t{cigar}\t*\t0\t0\t{'A' * length}\t{'I' * length}\tMD:Z:{md}\n"
+
+
+def pair(name, r1_cigar, r1_md, r2_cigar="20M", r2_md="20"):
+    return sam_line(name, r1_cigar, r1_md), sam_line(name, r2_cigar, r2_md)
+
+
+SKIP_1 = pair("p1", "10M3I4D10M", "10^ATTC10")
+SKIP_2 = pair("p2", "20M9I9D20M", "20^CCATTCAAG20")
+NO_MUT = pair("p3", "20M", "20")
+UNMAPPED = ("p4\t4\t*\t0\t0\t*\t*\t0\t0\tAAAA\tIIII\n", sam_line("p4", "20M", "20"))
+
+
+def make_reader(tmp_path, pairs):
+    r1, r2 = tmp_path / "S1_R1.sam", tmp_path / "S1_R2.sam"
+    r1.write_text("".join(p[0] for p in pairs))
+    r2.write_text("".join(p[1] for p in pairs))
+    reader = count_mut.readSam.__new__(count_mut.readSam)
+    reader._r1, reader._r2, reader._cores = str(r1), str(r2), 1
+    reader._mut_log = ListLogger()
+    reader._cds_start, reader._tile_begins, reader._tile_ends, reader._min_map_len = 1, 1, 100, 10
+    reader._seq = reader._cds_seq = reader._seq_lookup = None
+    reader._qual, reader._mutrate, reader._base = 0.9, 0.0025, 33
+    reader._posteriorQC = reader._error_override = False
+    reader._output_counts_dir, reader._sample_id = str(tmp_path), "S1"
+    reader._sample_counts_f = str(tmp_path / "counts_sample_S1.csv")
+    reader._sample_offreads_f = str(tmp_path / "offreads_S1.csv")
+    (tmp_path / "counts_sample_S1.csv").write_text("#Sample:S1\n")  # what __init__ writes
+    (tmp_path / "offreads_S1.csv").write_text("r1_start, r1_len, r2_start, r2_len\n")
+    track = pd.DataFrame({"pos": range(1, 101), "m_r1": 0, "m_r2": 0, "m_both": 0,
+                          "passed": 0, "wt_passed": 0})
+    reader._track_reads = track.set_index("pos")
+    return reader
+
+
+def run_multi_core(tmp_path, monkeypatch, pairs):
+    monkeypatch.setattr(count_mut.mp, "Pool", FakePool)
+    monkeypatch.setattr(locate_mut, "MutParser", FakeMutParser)
+    reader = make_reader(tmp_path, pairs)
+    reader.multi_core([])
+    return reader
+
+
+def test_multi_core_records_skipped_pairs_and_still_writes_outputs(tmp_path, monkeypatch):
+    reader = run_multi_core(tmp_path, monkeypatch, [SKIP_1, SKIP_2, NO_MUT, UNMAPPED])
+    assert (tmp_path / "skippedreads_S1.csv").read_text().splitlines() == [
+        "r1_start,r1_cigar,r2_start,r2_cigar",
+        "1,10M3I4D10M,1,20M",
+        "1,20M9I9D20M,1,20M",
+    ]
+    assert (tmp_path / "coverage_S1.csv").exists()
+    counts = (tmp_path / "counts_sample_S1.csv").read_text().splitlines()
+    assert counts[-1] == "HGVS,count"
+    assert "#Raw read depth:4" in counts
+    assert "#Final read-depth:3" in counts  # skipped pairs are not subtracted from the depth
+    assert any("SKIPPED_READ_PAIRS count=2" in m for m in reader._mut_log.messages)
+
+
+def test_multi_core_does_not_change_the_counts_header(tmp_path, monkeypatch):
+    run_multi_core(tmp_path, monkeypatch, [SKIP_1, SKIP_2, NO_MUT, UNMAPPED])
+    counts = (tmp_path / "counts_sample_S1.csv").read_text().splitlines()
+    assert [line.split(":")[0] for line in counts if line.startswith("#")] == HEADER_LABELS
+
+
+def test_multi_core_survives_a_failure_to_write_the_skipped_file(tmp_path, monkeypatch):
+    def fail(path, skipped):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(count_mut, "write_skipped_reads", fail)
+    reader = run_multi_core(tmp_path, monkeypatch, [SKIP_1, NO_MUT])
+    assert (tmp_path / "coverage_S1.csv").exists()
+    assert not (tmp_path / "skippedreads_S1.csv").exists()
+    assert any("Could not write" in m for m in reader._mut_log.messages)
+
+
+def test_multi_core_writes_no_skipped_file_when_nothing_is_skipped(tmp_path, monkeypatch):
+    reader = run_multi_core(tmp_path, monkeypatch, [NO_MUT, UNMAPPED])
+    assert not (tmp_path / "skippedreads_S1.csv").exists()
+    assert not any("SKIPPED" in m for m in reader._mut_log.messages)
+    assert (tmp_path / "coverage_S1.csv").exists()
