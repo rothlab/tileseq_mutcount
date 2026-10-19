@@ -98,6 +98,7 @@ def positions(records):
 def test_ins_then_del_share_a_position_key():
   assert positions(parse(**INS_THEN_DEL)[1]) == [(501, "ins"), (501, "del")]
 
+
 def test_del_then_ins_do_not_collide():
     assert positions(parse(**DEL_THEN_INS)[1]) == [(505, "ins"), (501, "del")]
 
@@ -167,6 +168,7 @@ def test_write_skipped_reads_with_no_pairs_writes_only_the_header(tmp_path):
     path = tmp_path / "skippedreads_S1.csv"
     assert count_mut.write_skipped_reads(str(path), []) == 0
     assert path.read_text().splitlines() == ["r1_start,r1_cigar,r2_start,r2_cigar"]
+
 
 ### test count_mut.process_wrapper ###
 def fake_parser(behaviour):
