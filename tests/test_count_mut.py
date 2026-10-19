@@ -55,17 +55,6 @@ UNMAPPED = ("p4\t4\t*\t0\t0\t*\t*\t0\t0\tAAAA\tIIII\n",  # R1 unmapped: never re
 
 
 ### fake classes to replace the parser and the process pool ###
-class ListLogger:
-    """Collects log messages so tests can look at them."""
-    def __init__(self):
-        self.messages = []
-
-    def _add(self, msg, *args, **kwargs):
-        self.messages.append(str(msg))
-
-    info = warning = error = debug = exception = _add
-
-
 class FakeResult:
     def __init__(self, value):
         self._value = value
@@ -183,7 +172,6 @@ class TestMultiCore:
     Only pairs that are skipped, unmapped or mutation-free are used, so the per-position
     coverage merging at the end of the job loop is not exercised here.
     """
-
     @staticmethod
     def make_reader(tmp_path, pairs):
         r1, r2 = tmp_path / "S1_R1.sam", tmp_path / "S1_R2.sam"
@@ -191,7 +179,7 @@ class TestMultiCore:
         r2.write_text("".join(p[1] for p in pairs))
         reader = count_mut.readSam.__new__(count_mut.readSam)  # skip __init__ (needs a parameter sheet)
         reader._r1, reader._r2, reader._cores = str(r1), str(r2), 1
-        reader._mut_log = ListLogger()
+        reader._mut_log = logging.getLogger("test_count_mut")
         reader._cds_start, reader._tile_begins, reader._tile_ends, reader._min_map_len = 1, 1, 100, 10
         reader._seq = reader._cds_seq = reader._seq_lookup = None
         reader._qual, reader._mutrate, reader._base = 0.9, 0.0025, 33
@@ -210,12 +198,11 @@ class TestMultiCore:
     def run(cls, tmp_path, monkeypatch, pairs):
         monkeypatch.setattr(count_mut.mp, "Pool", FakePool)
         monkeypatch.setattr(locate_mut, "MutParser", FakeMutParser)
-        reader = cls.make_reader(tmp_path, pairs)
-        reader.multi_core([])
-        return reader
+        cls.make_reader(tmp_path, pairs).multi_core([])
 
-    def test_records_skipped_pairs_and_still_writes_outputs(self, tmp_path, monkeypatch):
-        reader = self.run(tmp_path, monkeypatch, [SKIP_1, SKIP_2, NO_MUT, UNMAPPED])
+ 
+    def test_records_skipped_pairs_and_still_writes_outputs(self, tmp_path, monkeypatch, caplog):
+        self.run(tmp_path, monkeypatch, [SKIP_1, SKIP_2, NO_MUT, UNMAPPED])
         assert (tmp_path / "skippedreads_S1.csv").read_text().splitlines() == [
             "r1_start,r1_cigar,r2_start,r2_cigar",
             "1,10M3I4D10M,1,20M",
@@ -226,25 +213,28 @@ class TestMultiCore:
         assert counts[-1] == "HGVS,count"
         assert "#Raw read depth:4" in counts
         assert "#Final read-depth:3" in counts  # skipped pairs are not subtracted from the depth
-        assert any("SKIPPED_READ_PAIRS count=2" in m for m in reader._mut_log.messages)
+        assert any("SKIPPED_READ_PAIRS count=2" in m for m in caplog.messages)
+
 
     def test_does_not_change_the_counts_header(self, tmp_path, monkeypatch):
         self.run(tmp_path, monkeypatch, [SKIP_1, SKIP_2, NO_MUT, UNMAPPED])
         counts = (tmp_path / "counts_sample_S1.csv").read_text().splitlines()
         assert [line.split(":")[0] for line in counts if line.startswith("#")] == HEADER_LABELS
 
-    def test_survives_a_failure_to_write_the_skipped_file(self, tmp_path, monkeypatch):
+
+    def test_survives_a_failure_to_write_the_skipped_file(self, tmp_path, monkeypatch, caplog):
         def fail(path, skipped):
             raise OSError("disk full")
 
         monkeypatch.setattr(count_mut, "write_skipped_reads", fail)
-        reader = self.run(tmp_path, monkeypatch, [SKIP_1, NO_MUT])
+        self.run(tmp_path, monkeypatch, [SKIP_1, NO_MUT])
         assert (tmp_path / "coverage_S1.csv").exists()
         assert not (tmp_path / "skippedreads_S1.csv").exists()
-        assert any("Could not write" in m for m in reader._mut_log.messages)
+        assert any("Could not write" in m for m in caplog.messages)
 
-    def test_writes_no_skipped_file_when_nothing_is_skipped(self, tmp_path, monkeypatch):
-        reader = self.run(tmp_path, monkeypatch, [NO_MUT, UNMAPPED])
+
+    def test_writes_no_skipped_file_when_nothing_is_skipped(self, tmp_path, monkeypatch, caplog):
+        self.run(tmp_path, monkeypatch, [NO_MUT, UNMAPPED])
         assert not (tmp_path / "skippedreads_S1.csv").exists()
-        assert not any("SKIPPED" in m for m in reader._mut_log.messages)
+        assert not any("SKIPPED" in m for m in caplog.messages)
         assert (tmp_path / "coverage_S1.csv").exists()
