@@ -112,3 +112,20 @@ def test_two_insertions_then_deletion():
 
 def test_reported_read_shares_a_position_key():
     assert positions(parse(**REPORTED_READ)[1]) == [(126, "ins"), (126, "del")]
+
+
+### tests functions ###
+def test_isolated_insertion_converts_cleanly():
+   _, delins = parse([("10", "M"), ("2", "I"), ("10", "M")], "20", "A" * 10 + "GG" + "A" * 10, 491)
+   assert len(make_parser()._convert_mut(delins, "r1")) == 1
+
+
+def test_isolated_deletion_is_flattened_per_base():
+    _, delins = parse([("10", "M"), ("3", "D"), ("10", "M")], "10^ATT10", "A" * 20, 491)
+    assert list(make_parser()._convert_mut(delins, "r1")["pos"]) == ["501", "502", "503"]
+
+
+def test_snp_is_parsed():
+   snp, delins = parse([("20", "M")], "10A9", "A" * 10 + "C" + "A" * 9, 491)
+   assert snp == ["501|A|C|I"]
+   assert delins == []
