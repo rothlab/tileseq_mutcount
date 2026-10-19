@@ -147,3 +147,35 @@ def test_convert_mut_accepts_two_ins_then_del():
 
 
 ### test count_mut.write_skipped_reads ###
+SKIPPED_PAIRS = [
+   ("491", "10M3I4D10M", "520", "30M"),
+   ("466", "11S33M9I9D63M35S", "467", "104M47S")
+]
+
+
+def test_write_skipped_reads(tmp_path):
+    path = tmp_path / "skippedreads_S1.csv"
+    assert count_mut.write_skipped_reads(str(path), SKIPPED_PAIRS) == 2
+    assert path.read_text().splitlines() == [
+        "r1_start,r1_cigar,r2_start,r2_cigar",
+        "491,10M3I4D10M,520,30M",
+        "466,11S33M9I9D63M35S,467,104M47S",
+    ]
+
+
+def test_write_skipped_reads_with_no_pairs_writes_only_the_header(tmp_path):
+    path = tmp_path / "skippedreads_S1.csv"
+    assert count_mut.write_skipped_reads(str(path), []) == 0
+    assert path.read_text().splitlines() == ["r1_start,r1_cigar,r2_start,r2_cigar"]
+
+### test count_mut.process_wrapper ###
+def fake_parser(behaviour):
+    class FakeParser:
+        def __init__(self, *args, **kwargs):
+            pass
+        
+        def _main(self):
+            return behaviour()
+    return FakeParser
+
+
