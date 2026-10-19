@@ -179,3 +179,51 @@ def fake_parser(behaviour):
     return FakeParser
 
 
+def run_wrapper():
+  return count_mut.process_wrapper(
+     READ_ROW, None, None, None, 1, 100, 0.9,
+     logging.getLogger("test_duplicated_mutations"),
+     0.0025, 33, False, False, []
+  )
+
+
+def test_process_wrapper_skips_pair_on_duplicated_mutations(monkeypatch):
+    def raise_duplicated():
+        raise DuplicatedMutations()
+
+    monkeypatch.setattr(locate_mut, "MutParser", fake_parser(raise_duplicated))
+    result = run_wrapper()
+    assert len(result) == 7
+    hgvs, outside_mut, all_df, r1_clusters, r2_clusters, track_df, skipped_pair = result
+    assert (hgvs, outside_mut, r1_clusters, r2_clusters) == ([], [], [], [])
+    assert all_df.empty and track_df.empty
+    assert skipped_pair == ("491", "10M3I4D10M", "520", "30M")
+
+
+def test_process_wrapper_passes_normal_results_through(monkeypatch):
+    all_df, track_df = pd.DataFrame({"a": [1]}), pd.DataFrame({"b": [2]})
+    monkeypatch.setattr(locate_mut, "MutParser",
+                        fake_parser(lambda: ("c.1A>G", [5], all_df, ["c1"], ["c2"], track_df)))
+    hgvs, outside_mut, all_out, r1_clusters, r2_clusters, track_out, skipped_pair = run_wrapper()
+    assert (hgvs, outside_mut, r1_clusters, r2_clusters) == ("c.1A>G", [5], ["c1"], ["c2"])
+    assert all_out is all_df and track_out is track_df
+    assert skipped_pair is None
+
+
+def test_process_wrapper_does_not_swallow_other_errors(monkeypatch):
+    def raise_value_error():
+        raise ValueError("unrelated failure")
+
+    monkeypatch.setattr(locate_mut, "MutParser", fake_parser(raise_value_error))
+    with pytest.raises(ValueError):
+        run_wrapper()
+
+
+def test_process_wrapper_does_not_swallow_same_ref_and_alt(monkeypatch):
+    def raise_same_ref_alt():
+        raise SameRefandAlt(pd.DataFrame({"ref": ["A"], "alt": ["A"]}))
+
+    monkeypatch.setattr(locate_mut, "MutParser", fake_parser(raise_same_ref_alt))
+    with pytest.raises(SameRefandAlt):
+        run_wrapper()
+
