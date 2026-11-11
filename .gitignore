@@ -6,6 +6,7 @@ for_testing/*
 test.sh
 *.csv
 *.json
+*.pyc
 dist/*
 *.log
 ./TileSeqMut.egg-info/*
