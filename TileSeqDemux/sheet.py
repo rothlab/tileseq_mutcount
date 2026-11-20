@@ -55,9 +55,13 @@ class SheetError(Exception):
     def __init__(self, problems, path=None):
         self.problems = list(problems)
         self.path = path
-        where = " in %s" % path if path else ""
-        head = "%d problem%s%s:" % (len(self.problems), "" if len(self.problems) == 1 else "s", where)
-        super().__init__(head + "\n" + "\n".join("  - " + p for p in self.problems))
+
+    def __str__(self):
+        count = len(self.problems)
+        noun = "problem" if count == 1 else "problems"
+        where = f" in {self.path}" if self.path else ""
+        bullets = "\n".join(f"  - {problem}" for problem in self.problems)
+        return f"{count} {noun}{where}:\n{bullets}"
 
 
 @dataclass(frozen=True)
