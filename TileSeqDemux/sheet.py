@@ -132,14 +132,21 @@ class ParameterSheet:
     def describe(self, min_cover=None):
         """Human-readable lines: each index group, its tiles and their geometry."""
         cover = self.min_cover if min_cover is None else min_cover
-        lines = ["minimum coverage %s, CDS start %d" % (cover, self.cds_start)]
-        for g in self.groups:
-            lines.append("index shared by %d samples:" % len(g.members))
-            for sid in g.members:
-                t = self.tile_of(sid)
-                lines.append("  sample %-8s tile %-3s CDS %d-%d, minimum mapped length %d%s"
-                             % (sid, t.number, t.begins, t.ends, t.min_map(cover), "  (shared: holds the FASTQ files)" if sid == g.shared else ""))
+        lines = [f"minimum coverage {cover}, CDS start {self.cds_start}"]
+        for group in self.groups:
+            lines += self._describe_group(group, cover)
         return lines
+
+    def _describe_group(self, group, cover):
+        lines = [f"index shared by {len(group.members)} samples:"]
+        lines += [self._describe_member(group, sample_id, cover) for sample_id in group.members]
+        return lines
+
+    def _describe_member(self, group, sample_id, cover):
+        tile = self.tile_of(sample_id)
+        role = "  (shared: holds the FASTQ files)" if sample_id == group.shared else ""
+        return (f"  sample {sample_id:<8} tile {tile.number:<3} CDS {tile.begins}-{tile.ends}, "
+                f"minimum mapped length {tile.min_map(cover)}{role}")
 
 
 def _rows(text):
