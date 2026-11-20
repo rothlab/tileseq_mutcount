@@ -164,11 +164,17 @@ class _SheetParse:
 
     # -- helpers ---------------------------------------------------------------------------------------------
     def _find(self, label):
-        return [i for i, (r, _) in enumerate(self.rows) if r and r[0] == label]
+        """Indexes of the rows whose first cell is exactly `label`."""
+        return [index for index, (cells, _line_number) in enumerate(self.rows) if cells and cells[0] == label]
 
     def _hint(self, label):
-        near = [(r[0], n) for r, n in self.rows if r and r[0] and r[0].lower() == label.lower() and r[0] != label]
-        return " (found %r on line %d; labels must match exactly)" % near[0] if near else ""
+        """A hint for a label that is present but written with different capitals, such as 'index samples'."""
+        near_misses = [(cells[0], line_number) for cells, line_number in self.rows
+                       if cells and cells[0].lower() == label.lower() and cells[0] != label]
+        if not near_misses:
+            return ""
+        found, line_number = near_misses[0]
+        return f" (found {found!r} on line {line_number}; labels must match exactly)"
 
     def _once(self, label, what):
         hits = self._find(label)
