@@ -32,8 +32,16 @@ class InputValidationError(Exception):
     HEADER = "tileseq_demux cannot start. Fix these and run it again:"
 
     def __init__(self, sections):
-        self.sections = [(heading, list(problems)) for heading, problems in sections]
-        super().__init__(self.HEADER + "\n\n" + "\n\n".join("%s\n  - %s" % (h, "\n  - ".join(p)) for h, p in self.sections))
+      self.sections = [(heading, list(problems)) for heading, problems in sections]
+
+    def __str__(self):
+        blocks = [self._format_section(heading, problems) for heading, problems in self.sections]
+        return self.HEADER + "\n\n" + "\n\n".join(blocks)
+    
+    @staticmethod
+    def _format_section(heading, problems):
+        bullets = "\n".join("  - " + problem for problem in problems)
+        return heading + "\n" + bullets
 
 
 def _run_command(cmd, timeout=60):
