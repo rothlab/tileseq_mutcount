@@ -22,7 +22,10 @@ import shutil
 import subprocess
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Optional
 
+from TileSeqDemux.rules import Rule, RuleSet
 from TileSeqDemux.sheet import SheetError, SheetReader
 
 
@@ -52,6 +55,30 @@ def _last_line(text):
     """The last non-empty line of a tool's output. Warnings usually come first and the error last."""
     return next((line.strip() for line in reversed((text or "").splitlines()) if line.strip()), "no output")
 
+@dataclass(frozen=True)
+class ToolProbe:
+    """What happened when one tool was looked for on PATH and asked for its version."""
+    tool: str
+    path: Optional[str]            # None when the tool is not on PATH
+    status: Optional[int] = None   # its exit status, or None when it could not be run
+    output: str = ""               # what it printed; its version is in here
+    error: str = ""                # why it could not be run, or ""
+
+    def details(self, context):
+        return {"tool": self.tool, "path": self.path, "status": self.status, "error": self.error,
+                "last_line": _last_line(self.output)}
+
+
+TOOL_RULES = RuleSet(
+    details=("tool", "path", "status", "error", "last_line"),
+    rules=[
+        Rule("not_found", "{tool} was not found on PATH.",
+             lambda probe, context: probe.path is None),
+        Rule("cannot_run", "{tool} ({path}) could not be run: {error}",
+             lambda probe, context: probe.error != ""),
+        Rule("bad_exit", "{tool} ({path}) exited with status {status} when asked for its version: {last_line}",
+             lambda probe, context: probe.status != 0),
+    ])
 
 class ToolChecker:
     """Checks that the tools tileseq_demux calls are on PATH and run.
@@ -72,19 +99,19 @@ class ToolChecker:
         """Return a list of problems, empty when every tool is usable."""
         problems = []
         for tool in self._tools:
-            path = self._which(tool)
-            if not path:
-                problems.append("%s was not found on PATH." % tool)
-                continue
-            try:
-                result = self._run([tool, "--version"])
-            except (OSError, subprocess.TimeoutExpired) as err:
-                problems.append("%s (%s) could not be run: %s" % (tool, path, err))
-                continue
-            if result.returncode != 0:
-                problems.append("%s (%s) exited with status %d when asked for its version: %s"
-                                % (tool, path, result.returncode, _last_line(result.stdout)))
+            problems += TOOL_RULES.check(self._probe(tool), None).messages
         return problems
+
+    def _probe(self, tool):
+        """Look for `tool` on PATH and, if it is there, ask it for its version."""
+        path = self._which(tool)
+        if not path:
+            return ToolProbe(tool, None)
+        try:
+            result = self._run([tool, "--version"])
+        except (OSError, subprocess.TimeoutExpired) as err:
+            return ToolProbe(tool, path, error=str(err))
+        return ToolProbe(tool, path, result.returncode, result.stdout)
 
 
 class FastqFolderChecker:
