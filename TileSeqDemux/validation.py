@@ -99,7 +99,7 @@ class ToolChecker:
         """Return a list of problems, empty when every tool is usable."""
         problems = []
         for tool in self._tools:
-            problems += TOOL_RULES.check(self._probe(tool), None).messages
+            problems += TOOL_RULES.check(self._probe(tool), None).problems
         return problems
 
     def _probe(self, tool):
