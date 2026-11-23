@@ -30,6 +30,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from TileSeqDemux.rules import Rule, RuleSet
+
 ID_PATTERN = re.compile(r"^[^_\s/\\]+$")      # the sample ID is the first "_" token of a FASTQ name, so no "_"
 
 
@@ -156,6 +158,124 @@ def _rows(text):
     reader = csv.reader(io.StringIO(text, newline=""))
     return [([c.strip() for c in row], reader.line_num) for row in reader]
 
+# -- row rules ------------------------------------------------------------------------------------------------
+BAD_ID_MESSAGE = ("sample ID {bad_id!r} must not be empty or contain '_', spaces or slashes "
+                  "(the sample ID is the first '_' token of the FASTQ file name)")
+
+
+def _whole_number(text):
+    """The integer in `text`, or None when it is not a whole number."""
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class TileRow:
+    """One row of the tile table. The context its rules receive is the dict of tiles read so far."""
+    number: str
+    start_text: str
+    end_text: str
+
+    @property
+    def start(self):
+        return _whole_number(self.start_text)
+
+    @property
+    def end(self):
+        return _whole_number(self.end_text)
+
+    def details(self, known_tiles):
+        return {"number": self.number, "start_text": self.start_text, "end_text": self.end_text, "start": self.start, "end": self.end}
+
+
+TILE_RULES = RuleSet(
+    details=("number", "start_text", "end_text", "start", "end"),
+    rules=[
+        Rule("not_numbers", "start and end amino acids must be whole numbers, found {start_text!r} and {end_text!r}",
+             lambda row, known_tiles: row.start is None or row.end is None),
+        Rule("bad_range", "tile {number} has start {start} and end {end}; need 1 <= start <= end",
+             lambda row, known_tiles: row.start < 1 or row.end < row.start),
+        Rule("duplicate", "tile {number} is listed twice",
+             lambda row, known_tiles: row.number in known_tiles),
+    ])
+
+
+@dataclass(frozen=True)
+class SampleContext:
+    """What the sample rules need to know about the rest of the sheet."""
+    known_samples: dict
+    tiles: dict
+
+    @property
+    def tile_list(self):
+        return ", ".join(sorted(self.tiles, key=lambda number: (len(number), number)))
+
+
+@dataclass(frozen=True)
+class SampleRow:
+    """One row of the sample table."""
+    sample_id: str
+    tile: str
+    condition: str
+    timepoint: str
+    replicate: str
+
+    def details(self, context):
+        return {"bad_id": self.sample_id, "sample_id": self.sample_id, "tile": self.tile, "known_tiles": context.tile_list}
+
+
+SAMPLE_RULES = RuleSet(
+    details=("bad_id", "sample_id", "tile", "known_tiles"),
+    rules=[
+        Rule("bad_id", BAD_ID_MESSAGE,
+             lambda row, context: not ID_PATTERN.match(row.sample_id)),
+        Rule("duplicate", "sample {sample_id} is listed twice",
+             lambda row, context: row.sample_id in context.known_samples),
+        Rule("unknown_tile", "sample {sample_id} uses tile {tile!r}, which is not in the tile table (tiles: {known_tiles})",
+             lambda row, context: bool(context.tiles) and row.tile not in context.tiles,
+             blocks_row=False),                       # reported, but the sample is kept
+    ])
+
+
+@dataclass(frozen=True)
+class PairContext:
+    """What the pair rules need to know about the rows accepted so far."""
+    seen: set          # the (shared, unique) pairs
+    owners: dict       # unique ID -> (shared ID, line number) of the row that used it first
+
+
+@dataclass(frozen=True)
+class PairRow:
+    """One row of the Index Samples section."""
+    shared: str
+    unique: str
+
+    @property
+    def bad_id(self):
+        """The first of the two IDs that cannot be a sample ID, or None."""
+        return next((sample_id for sample_id in (self.shared, self.unique) if not ID_PATTERN.match(sample_id)), None)
+
+    def details(self, context):
+        first_shared, first_line = context.owners.get(self.unique, ("", ""))
+        return {"shared": self.shared, "unique": self.unique, "bad_id": self.bad_id, "first_shared": first_shared, "first_line": first_line}
+
+
+PAIR_RULES = RuleSet(
+    details=("shared", "unique", "bad_id", "first_shared", "first_line"),
+    rules=[
+        Rule("no_unique", "shared sample {shared} has no unique sample ID",
+             lambda row, context: row.unique == ""),
+        Rule("bad_id", BAD_ID_MESSAGE,
+             lambda row, context: row.bad_id is not None),
+        Rule("same_id", "shared and unique sample ID are both {shared}",
+             lambda row, context: row.shared == row.unique),
+        Rule("pair_twice", "the pair {shared},{unique} is listed twice",
+             lambda row, context: (row.shared, row.unique) in context.seen),
+        Rule("unique_reused", "unique sample {unique} is already paired with shared sample {first_shared} on line {first_line}",
+             lambda row, context: row.unique in context.owners),
+    ])
 
 class _SheetParse:
     def __init__(self, rows, path):
@@ -222,17 +342,12 @@ class _SheetParse:
         cells, _line_number = row
         return bool(cells) and cells[0] != ""
 
+    def _record(self, where, messages):
+      self.problems += [f"{where}: {message}" for message in messages]
+
     def _table(self, header_index):
         """Rows after a header row, up to the first row with an empty first cell (where tsm csv2json ends a table)."""
         return list(itertools.takewhile(self._has_first_cell, self.rows[header_index + 1:]))
-
-    @staticmethod
-    def _id_problem(sample_id, where):
-        """Why `sample_id` cannot be a sample ID, or None when it can."""
-        if ID_PATTERN.match(sample_id):
-            return None
-        return (f"{where}: sample ID {sample_id!r} must not be empty or contain '_', spaces or slashes "
-                "(the sample ID is the first '_' token of the FASTQ file name)")
 
     # -- sections --------------------------------------------------------------------------------------------
     def sequence(self):
@@ -288,21 +403,11 @@ class _SheetParse:
         return tiles
 
     def _read_tile(self, cells, line_number, known_tiles):
-      """One Tile from one row of the tile table, or None after recording what is wrong with the row."""
-      where = f"tile table line {line_number}"
-      number, start_text, end_text = self._padded(cells, 3)
-      try:
-          start_aa, end_aa = int(start_text), int(end_text)
-      except ValueError:
-          self.problems.append(f"{where}: start and end amino acids must be whole numbers, found {start_text!r} and {end_text!r}")
-          return None
-      if start_aa < 1 or end_aa < start_aa:
-          self.problems.append(f"{where}: tile {number} has start {start_aa} and end {end_aa}; need 1 <= start <= end")
-          return None
-      if number in known_tiles:
-          self.problems.append(f"{where}: tile {number} is listed twice")
-          return None
-      return Tile(number, start_aa, end_aa)
+        """One Tile from one row of the tile table, or None after recording what is wrong with the row."""
+        row = TileRow(*self._padded(cells, 3))
+        verdict = TILE_RULES.check(row, known_tiles)
+        self._record(f"tile table line {line_number}", verdict.messages)
+        return None if verdict.blocked else Tile(row.number, row.start, row.end)
 
     def samples(self, tiles):
         header_index = self._once(L.SAMPLES, "sample table header row")
@@ -326,20 +431,11 @@ class _SheetParse:
 
     def _read_sample(self, cells, line_number, known_samples, tiles):
         """One Sample from one row of the sample table, or None after recording what is wrong with the row."""
-        where = f"sample table line {line_number}"
-        sample_id, tile, condition, timepoint, replicate = self._padded(cells, 5)
-        id_problem = self._id_problem(sample_id, where)
-        if id_problem:
-            self.problems.append(id_problem)
-            return None
-        if sample_id in known_samples:
-            self.problems.append(f"{where}: sample {sample_id} is listed twice")
-            return None
-        if tiles and tile not in tiles:
-            known = ", ".join(sorted(tiles, key=lambda number: (len(number), number)))
-            self.problems.append(f"{where}: sample {sample_id} uses tile {tile!r}, which is not in the tile table (tiles: {known})")
-        return Sample(sample_id, tile, condition, timepoint, replicate)
-
+        row = SampleRow(*self._padded(cells, 5))
+        verdict = SAMPLE_RULES.check(row, SampleContext(known_samples, tiles))
+        self._record(f"sample table line {line_number}", verdict.messages)
+        return None if verdict.blocked else Sample(row.sample_id, row.tile, row.condition, row.timepoint, row.replicate)
+    
     def groups(self, samples):
         rows = self._index_rows()
         if rows is None:
@@ -395,33 +491,16 @@ class _SheetParse:
 
     def _read_pairs(self, rows):
         """(shared, unique, line_number) for every usable row of the section. Rows with a problem are reported and left out."""
-        pairs, seen, owners = [], set(), {}
+        pairs, context = [], PairContext(seen=set(), owners={})
         for cells, line_number in rows:
-            shared, unique = self._padded(cells, 2)
-            problems = self._pair_problems(shared, unique, line_number, seen, owners)
-            self.problems += problems
-            if not problems:
-                pairs.append((shared, unique, line_number))
-                seen.add((shared, unique))
-                owners[unique] = (shared, line_number)
+            row = PairRow(*self._padded(cells, 2))
+            verdict = PAIR_RULES.check(row, context)
+            self._record(f"line {line_number}", verdict.messages)
+            if not verdict.blocked:
+                pairs.append((row.shared, row.unique, line_number))
+                context.seen.add((row.shared, row.unique))
+                context.owners[row.unique] = (row.shared, line_number)
         return pairs
-
-    def _pair_problems(self, shared, unique, line_number, seen, owners):
-        """What makes one row of the section unusable, as a list of messages. An empty list means the row is fine."""
-        where = f"line {line_number}"
-        if unique == "":
-            return [f"{where}: shared sample {shared} has no unique sample ID"]
-        id_problems = [self._id_problem(sample_id, where) for sample_id in (shared, unique)]
-        if any(id_problems):
-            return [problem for problem in id_problems if problem]
-        if shared == unique:
-            return [f"{where}: shared and unique sample ID are both {shared}"]
-        if (shared, unique) in seen:
-            return [f"{where}: the pair {shared},{unique} is listed twice"]
-        if unique in owners:
-            first_shared, first_line = owners[unique]
-            return [f"{where}: unique sample {unique} is already paired with shared sample {first_shared} on line {first_line}"]
-        return []
 
     @staticmethod
     def _mentions(pairs):
