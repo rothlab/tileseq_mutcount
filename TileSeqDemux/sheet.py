@@ -18,6 +18,13 @@ The shared ID is the sample whose FASTQ files hold both tiles; the unique ID nam
 must also be listed in the ordinary sample table, which gives each one its tile. The row of empty cells above the
 section is required: without it `tsm csv2json` reads the section as part of the table above.
 
+There are two ways to check something, and the difference is whether the code that follows depends on the result:
+    _record_problem_if(condition, message)   only records a problem; nothing below depends on it
+    _check(rule_set, subject)                applies ordered rules and returns a Verdict to act on:
+                                             stop, skip a row, fall back to a default
+Use the first for a single check. Use a RuleSet (see rules.py) when a thing has several related checks, or when the
+code must branch on the outcome.
+
 Every problem found is collected and reported together, so a sheet can be fixed in one pass. Standard library only.
 Nothing in this package imports TileSeqMut.
 """
@@ -30,7 +37,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from TileSeqDemux.rules import Rule, RuleSet
+from TileSeqDemux.rules import REPORTS, WARNS, Facts, Rule, RuleSet
 
 ID_PATTERN = re.compile(r"^[^_\s/\\]+$")      # the sample ID is the first "_" token of a FASTQ name, so no "_"
 
@@ -277,6 +284,79 @@ PAIR_RULES = RuleSet(
              lambda row, context: row.unique in context.owners),
     ])
 
+def _decimal_number(text):
+    """The float in `text`, or None when it is not a number."""
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+# -- rules for everything else: single values, tables and sections --------------------------------------------
+REPEATED_LABEL = Rule("repeated", "{label!r} appears {count} times (lines {lines})",
+                      lambda facts, context: facts.count > 1)
+
+LOOKUP_RULES = RuleSet(              # a labelled row that must appear exactly once
+    details=("label", "what", "count", "lines", "hint"),
+    rules=[
+        Rule("missing", "no {what} labelled {label!r}{hint}", lambda facts, context: facts.count == 0),
+        REPEATED_LABEL,
+    ])
+
+INDEX_LOOKUP_RULES = RuleSet(        # the title row of the Index Samples section
+    details=("label", "count", "lines", "hint"),
+    rules=[
+        Rule("missing", "no {label!r} section: nothing to demultiplex{hint}", lambda facts, context: facts.count == 0),
+        REPEATED_LABEL,
+    ])
+
+INTEGER_RULES = RuleSet(
+    details=("label", "text", "number", "minimum"),
+    rules=[
+        Rule("not_whole", "{label!r} should be a whole number, found {text!r}",
+             lambda facts, context: facts.number is None),
+        Rule("too_small", "{label!r} should be at least {minimum}, found {number}",
+             lambda facts, context: facts.number < facts.minimum),
+    ])
+
+COVER_RULES = RuleSet(
+    details=("label", "count", "text", "number", "default"),
+    rules=[
+        Rule("repeated", "{label!r} appears {count} times",
+             lambda facts, context: facts.count > 1),
+        Rule("no_value", "no {label!r} value: using {default}, as tsm csv2json does",
+             lambda facts, context: facts.text == "", effect=WARNS),
+        Rule("not_a_number", "{label!r} should be a number, found {text!r}",
+             lambda facts, context: facts.text != "" and facts.number is None),
+        Rule("out_of_range", "{label!r} should be above 0 and at most 1, found {text}",
+             lambda facts, context: facts.number is not None and not 0 < facts.number <= 1, effect=REPORTS),
+    ])
+
+INDEX_SECTION_RULES = RuleSet(       # the rows around the Index Samples title
+    details=("label", "title_line", "above", "above_has_content", "has_header", "header_line", "found", "header_ok", "expected"),
+    rules=[
+        Rule("row_above_not_empty", "line {title_line}: the row above {label!r} must be a row of empty cells (',,,,'), not {above!r}; "
+                                    "otherwise tsm csv2json reads the section as part of the table above",
+             lambda facts, context: facts.above_has_content, effect=REPORTS),
+        Rule("no_header_row", "{label!r} has no header row (expected {expected})",
+             lambda facts, context: not facts.has_header),
+        Rule("wrong_header", "line {header_line}: the header under {label!r} should be {expected}, found {found}",
+             lambda facts, context: not facts.header_ok),
+    ])
+
+CDS_RULES = RuleSet(                 # the CDS against the sequence
+    details=("start_label", "end_label", "start", "end", "sequence_length", "cds_length"),
+    rules=[
+        Rule("start_beyond_sequence", "{start_label!r} is {start} but the sequence has only {sequence_length} bases",
+             lambda facts, context: facts.start > facts.sequence_length),
+        Rule("end_before_start", "{end_label!r} ({end}) is before {start_label!r} ({start})",
+             lambda facts, context: facts.end is not None and facts.end < facts.start),
+        Rule("end_beyond_sequence", "{end_label!r} is {end} but the sequence has only {sequence_length} bases",
+             lambda facts, context: facts.end is not None and facts.end > facts.sequence_length),
+        Rule("length_not_multiple_of_3", "the CDS ({start} to {end}) is {cds_length} bases long, not a multiple of 3",
+             lambda facts, context: facts.end is not None and facts.cds_length % 3 != 0, effect=WARNS),
+    ])
+
+
 class _SheetParse:
     def __init__(self, rows, path):
         self.rows = rows
@@ -285,6 +365,23 @@ class _SheetParse:
         self.warnings = []
 
     # -- helpers ---------------------------------------------------------------------------------------------
+    def _check(self, rule_set, subject, context=None, where=None):
+      """Apply `rule_set` to `subject` and record what it finds. The Verdict says whether the subject is usable."""
+      verdict = rule_set.check(subject, context)
+      prefix = f"{where}: " if where else ""
+      self.problems += [prefix + message for message in verdict.problems]
+      self.warnings += [prefix + message for message in verdict.warnings]
+      return verdict
+
+    def _record_problem_if(self, condition, message, where=None):
+        """Record `message` as a problem when `condition` is true.
+
+        This only records. It applies no rule and decides nothing. To act on a problem (stop, skip a row, use a default),
+        use a RuleSet with _check, which returns a Verdict.
+        """
+        if condition:
+            self.problems.append(f"{where}: {message}" if where else message)
+
     def _find(self, label):
         """Indexes of the rows whose first cell is exactly `label`."""
         return [index for index, (cells, _line_number) in enumerate(self.rows) if cells and cells[0] == label]
@@ -299,51 +396,38 @@ class _SheetParse:
         return f" (found {found!r} on line {line_number}; labels must match exactly)"
 
     def _once(self, label, what):
+        """The index of the one row labelled `label`, or None after recording that it is missing or repeated."""
         hits = self._find(label)
-        if not hits:
-            self.problems.append("no %s labelled %r%s" % (what, label, self._hint(label)))
-            return None
-        if len(hits) > 1:
-            self.problems.append("%r appears %d times (lines %s)" % (label, len(hits), ", ".join(str(self.rows[i][1]) for i in hits)))
-            return None
-        return hits[0]
+        lookup = Facts(label=label, what=what, count=len(hits), lines=self._lines(hits), hint=self._hint(label))
+        return None if self._check(LOOKUP_RULES, lookup).blocked else hits[0]
 
     def _scalar(self, label, required=True):
-        i = self._once(label, "row") if required else (self._find(label) or [None])[0]
-        if i is None:
+        index = self._once(label, "row") if required else (self._find(label) or [None])[0]
+        if index is None:
             return None
-        row, line = self.rows[i]
-        value = row[1] if len(row) > 1 else ""
-        if value == "":
-            if required:
-                self.problems.append("%r on line %d has no value" % (label, line))
-            return None
-        return value
+        _cells, line_number = self.rows[index]
+        value = self._second_cell(index)
+        self._record_problem_if(required and value == "", f"{label!r} on line {line_number} has no value")
+        return value or None
 
-    def _int(self, label, value, minimum=1):
-        try:
-            number = int(value)
-        except ValueError:
-            self.problems.append("%r should be a whole number, found %r" % (label, value))
-            return None
-        if number < minimum:
-            self.problems.append("%r should be at least %d, found %d" % (label, minimum, number))
-            return None
-        return number
+    def _int(self, label, text, minimum=1):
+        number = _whole_number(text)
+        verdict = self._check(INTEGER_RULES, Facts(label=label, text=text, number=number, minimum=minimum))
+        return None if verdict.blocked else number
+
+    def _second_cell(self, row_index):
+      cells, _line_number = self.rows[row_index]
+      return cells[1] if len(cells) > 1 else ""
 
     @staticmethod
     def _padded(cells, width):
         """The first 'width' cells of a row, padded with empty strings if the row is shorter."""
         return (cells + [""] *width)[:width]
 
-
     @staticmethod
     def _has_first_cell(row):
         cells, _line_number = row
         return bool(cells) and cells[0] != ""
-
-    def _record(self, where, messages):
-      self.problems += [f"{where}: {message}" for message in messages]
 
     def _table(self, header_index):
         """Rows after a header row, up to the first row with an empty first cell (where tsm csv2json ends a table)."""
@@ -354,47 +438,26 @@ class _SheetParse:
         value = self._scalar(L.SEQUENCE)
         if value is None:
             return None
-        seq = value.upper()
-        bad = sorted(set(seq) - L.ALLOWED_BASES)
-        if bad:
-            first = next(i for i, ch in enumerate(seq) if ch in bad)
-            self.problems.append("%r contains characters other than A, C, G, T, N: %s (first at position %d)"
-                                 % (L.SEQUENCE, " ".join(repr(b) for b in bad[:5]), first + 1))
-            return None
-        return seq
+        sequence = value.upper()
+        bad = sorted(set(sequence) - L.ALLOWED_BASES)
+        position = next((index for index, base in enumerate(sequence) if base in bad), 0) + 1
+        shown = " ".join(repr(base) for base in bad[:5])
+        self._record_problem_if(bool(bad), f"{L.SEQUENCE!r} contains characters other than A, C, G, T, N: {shown} (first at position {position})")
+        return None if bad else sequence
 
     def min_cover(self):
         rows_found = self._find(L.MIN_COVER)
-        if len(rows_found) > 1:
-            self.problems.append(f"{L.MIN_COVER!r} appears {len(rows_found)} times")
-            return L.DEFAULT_MIN_COVER
         text = self._second_cell(rows_found[0]) if rows_found else ""
-        if text == "":
-            self.warnings.append(f"no {L.MIN_COVER!r} value: using {L.DEFAULT_MIN_COVER}, as tsm csv2json does")
-            return L.DEFAULT_MIN_COVER
-        return self._parse_min_cover(text)
-
-    def _second_cell(self, row_index):
-        cells, _line_number = self.rows[row_index]
-        return cells[1] if len(cells) > 1 else ""
-
-    def _parse_min_cover(self, text):
-        try:
-            cover = float(text)
-        except ValueError:
-            self.problems.append(f"{L.MIN_COVER!r} should be a number, found {text!r}")
-            return L.DEFAULT_MIN_COVER
-        if not 0 < cover <= 1:
-            self.problems.append(f"{L.MIN_COVER!r} should be above 0 and at most 1, found {text}")
-        return cover
+        facts = Facts(label=L.MIN_COVER, count=len(rows_found), text=text, number=_decimal_number(text), default=L.DEFAULT_MIN_COVER)
+        verdict = self._check(COVER_RULES, facts)
+        return L.DEFAULT_MIN_COVER if verdict.blocked or facts.number is None else facts.number
 
     def tiles(self):
         header_index = self._once(L.TILES, "tile table header row")
         if header_index is None:
             return {}
         rows = self._table(header_index)
-        if not rows:
-            self.problems.append(f"the tile table under {L.TILES!r} is empty")
+        self._record_problem_if(not rows, f"the tile table under {L.TILES!r} is empty")
         tiles = {}
         for cells, line_number in rows:
             tile = self._read_tile(cells, line_number, tiles)
@@ -405,43 +468,35 @@ class _SheetParse:
     def _read_tile(self, cells, line_number, known_tiles):
         """One Tile from one row of the tile table, or None after recording what is wrong with the row."""
         row = TileRow(*self._padded(cells, 3))
-        verdict = TILE_RULES.check(row, known_tiles)
-        self._record(f"tile table line {line_number}", verdict.messages)
+        verdict = self._check(TILE_RULES, row, known_tiles, where=f"tile table line {line_number}")
         return None if verdict.blocked else Tile(row.number, row.start, row.end)
 
     def samples(self, tiles):
         header_index = self._once(L.SAMPLES, "sample table header row")
         if header_index is None:
             return {}
-        self._check_second_column(header_index)
+        header_cells, _line_number = self.rows[header_index]
+        found = self._padded(header_cells, 2)[1]
+        self._record_problem_if(found != L.SAMPLES_SECOND_COLUMN, f"sample table: the second column should be {L.SAMPLES_SECOND_COLUMN!r}, found {found!r}")
         samples = {}
         for cells, line_number in self._table(header_index):
             sample = self._read_sample(cells, line_number, samples, tiles)
             if sample is not None:
                 samples[sample.sample_id] = sample
-        if not samples:
-            self.problems.append(f"the sample table under {L.SAMPLES!r} is empty")
+        self._record_problem_if(not samples, f"the sample table under {L.SAMPLES!r} is empty")
         return samples
 
-    def _check_second_column(self, header_index):
-        cells, _line_number = self.rows[header_index]
-        found = self._padded(cells, 2)[1]
-        if found != L.SAMPLES_SECOND_COLUMN:
-            self.problems.append(f"sample table: the second column should be {L.SAMPLES_SECOND_COLUMN!r}, found {found!r}")
-
     def _read_sample(self, cells, line_number, known_samples, tiles):
-        """One Sample from one row of the sample table, or None after recording what is wrong with the row."""
-        row = SampleRow(*self._padded(cells, 5))
-        verdict = SAMPLE_RULES.check(row, SampleContext(known_samples, tiles))
-        self._record(f"sample table line {line_number}", verdict.messages)
-        return None if verdict.blocked else Sample(row.sample_id, row.tile, row.condition, row.timepoint, row.replicate)
+      """One Sample from one row of the sample table, or None after recording what is wrong with the row."""
+      row = SampleRow(*self._padded(cells, 5))
+      verdict = self._check(SAMPLE_RULES, row, SampleContext(known_samples, tiles), where=f"sample table line {line_number}")
+      return None if verdict.blocked else Sample(row.sample_id, row.tile, row.condition, row.timepoint, row.replicate)
     
     def groups(self, samples):
         rows = self._index_rows()
         if rows is None:
             return []
-        if not rows:
-            self.problems.append(f"the {L.INDEX!r} section lists no samples")
+        self._record_problem_if(not rows, f"the {L.INDEX!r} section lists no samples")
         pairs = self._read_pairs(rows)
         self._check_samples_exist(pairs, samples)
         groups = self._build_groups(pairs)
@@ -451,51 +506,30 @@ class _SheetParse:
     def _index_rows(self):
         """The data rows of the Index Samples section, or None after recording why the section cannot be read."""
         titles = self._find(L.INDEX)
-        if len(titles) != 1:
-            self.problems.append(self._section_count_problem(titles))
+        lookup = Facts(label=L.INDEX, count=len(titles), lines=self._lines(titles), hint=self._hint(L.INDEX))
+        if self._check(INDEX_LOOKUP_RULES, lookup).blocked:
             return None
-        self._check_empty_row_above(titles[0])
-        header_problem = self._header_problem(titles[0])
-        if header_problem:
-            self.problems.append(header_problem)
+        if self._check(INDEX_SECTION_RULES, self._index_layout(titles[0])).blocked:
             return None
         return self._table(titles[0] + 1)
 
-    def _section_count_problem(self, titles):
-        if not titles:
-            return f"no {L.INDEX!r} section: nothing to demultiplex{self._hint(L.INDEX)}"
-        lines = ", ".join(str(self.rows[index][1]) for index in titles)
-        return f"{L.INDEX!r} appears {len(titles)} times (lines {lines})"
-
-    def _check_empty_row_above(self, title_index):
-        """tsm csv2json ends a table at the first row with an empty first cell, so the section needs one above it."""
-        if title_index == 0:
-            return
-        cells_above, _line_number = self.rows[title_index - 1]
-        if any(cells_above):
-            _cells, title_line = self.rows[title_index]
-            above = ",".join(cells_above)
-            self.problems.append(f"line {title_line}: the row above {L.INDEX!r} must be a row of empty cells (',,,,'), not {above!r}; "
-                                 "otherwise tsm csv2json reads the section as part of the table above")
-
-    def _header_problem(self, title_index):
-        """Why the row under the title is not the expected header row, or None when it is."""
-        expected = ",".join(L.INDEX_HEADER)
-        if title_index + 1 >= len(self.rows):
-            return f"{L.INDEX!r} has no header row (expected {expected})"
-        cells, line_number = self.rows[title_index + 1]
-        if tuple(cells[:2]) != L.INDEX_HEADER:
-            found = ",".join(cells[:2]) or "an empty row"
-            return f"line {line_number}: the header under {L.INDEX!r} should be {expected}, found {found}"
-        return None
+    def _index_layout(self, title_index):
+      """What the section rules need to know about the rows around the section title."""
+      cells_above = self.rows[title_index - 1][0] if title_index > 0 else []
+      header = self.rows[title_index + 1] if title_index + 1 < len(self.rows) else None
+      header_cells, header_line = header if header else ([], None)
+      return Facts(label=L.INDEX, title_line=self.rows[title_index][1],
+                    above=",".join(cells_above), above_has_content=any(cells_above),
+                    has_header=header is not None, header_line=header_line,
+                    found=",".join(header_cells[:2]) or "an empty row", header_ok=tuple(header_cells[:2]) == L.INDEX_HEADER,
+                    expected=",".join(L.INDEX_HEADER))
 
     def _read_pairs(self, rows):
         """(shared, unique, line_number) for every usable row of the section. Rows with a problem are reported and left out."""
         pairs, context = [], PairContext(seen=set(), owners={})
         for cells, line_number in rows:
             row = PairRow(*self._padded(cells, 2))
-            verdict = PAIR_RULES.check(row, context)
-            self._record(f"line {line_number}", verdict.messages)
+            verdict = self._check(PAIR_RULES, row, context, where=f"line {line_number}")
             if not verdict.blocked:
                 pairs.append((row.shared, row.unique, line_number))
                 context.seen.add((row.shared, row.unique))
@@ -512,26 +546,24 @@ class _SheetParse:
     def _check_samples_exist(self, pairs, samples):
         """Every ID in the section must also be in the sample table, which gives it its tile."""
         for sample_id, role, line_number in self._mentions(pairs):
-            if sample_id not in samples:
-                self.problems.append(f"line {line_number}: {role} sample {sample_id} is not in the sample table")
+            self._record_problem_if(sample_id not in samples, f"{role} sample {sample_id} is not in the sample table", f"line {line_number}")
 
     def _build_groups(self, pairs):
         uniques_by_shared = {}
         for shared, unique, _line_number in pairs:
             uniques_by_shared.setdefault(shared, []).append(unique)
         for _shared, unique, line_number in pairs:
-            if unique in uniques_by_shared:
-                self.problems.append(f"line {line_number}: sample {unique} is a unique sample here and a shared sample elsewhere")
+            self._record_problem_if(unique in uniques_by_shared, f"sample {unique} is a unique sample here and a shared sample elsewhere",
+                             f"line {line_number}")
         return [IndexGroup(shared, tuple(uniques)) for shared, uniques in uniques_by_shared.items()]
 
     def _check_group_tiles(self, groups, samples):
         for group in groups:
             tiles_used = [samples[member].tile for member in group.members if member in samples]
             repeated = sorted(tile for tile, count in Counter(tiles_used).items() if count > 1)
-            if repeated:
-                self.problems.append(f"samples {', '.join(group.members)} share an index but tile {', '.join(repeated)} "
-                                     "appears more than once; tiles in one index must differ")
-
+            members, repeated_text = ", ".join(group.members), ", ".join(repeated)
+            self._record_problem_if(bool(repeated), f"samples {members} share an index but tile {repeated_text} appears more than once; "
+                                             "tiles in one index must differ")
 
     def run(self):
         sequence = self.sequence()
@@ -549,25 +581,17 @@ class _SheetParse:
         return ParameterSheet(self.path, sequence, cds_start, cds_end, cover, tiles, samples, groups, self.warnings)
 
     def _cross_check(self, sequence, cds_start, cds_end, tiles):
+        """Checks that need several values at once: the CDS must fit in the sequence, and every tile must fit in the CDS."""
         if sequence is None or cds_start is None:
             return
-        if cds_start > len(sequence):
-            self.problems.append("%r is %d but the sequence has only %d bases" % (L.CDS_START, cds_start, len(sequence)))
+        last_base = cds_end if cds_end is not None else len(sequence)
+        cds = Facts(start_label=L.CDS_START, end_label=L.CDS_END, start=cds_start, end=cds_end,
+                    sequence_length=len(sequence), cds_length=last_base - cds_start + 1)
+        if self._check(CDS_RULES, cds).blocked:
             return
-        if cds_end is not None:
-            if cds_end < cds_start:
-                self.problems.append("%r (%d) is before %r (%d)" % (L.CDS_END, cds_end, L.CDS_START, cds_start))
-                return
-            if cds_end > len(sequence):
-                self.problems.append("%r is %d but the sequence has only %d bases" % (L.CDS_END, cds_end, len(sequence)))
-                return
-            if (cds_end - cds_start + 1) % 3:
-                self.warnings.append("the CDS (%d to %d) is %d bases long, not a multiple of 3" % (cds_start, cds_end, cds_end - cds_start + 1))
-        cds_len = (cds_end - cds_start + 1) if cds_end is not None else len(sequence) - cds_start + 1
-        for t in tiles.values():
-            if t.ends > cds_len:
-                self.problems.append("tile %s ends at CDS position %d (amino acid %d) but the CDS has only %d bases"
-                                     % (t.number, t.ends, t.end_aa, cds_len))
+        for tile in tiles.values():
+            self._record_problem_if(tile.ends > cds.cds_length,
+                             f"tile {tile.number} ends at CDS position {tile.ends} (amino acid {tile.end_aa}) but the CDS has only {cds.cds_length} bases")
 
 
 class SheetReader:
