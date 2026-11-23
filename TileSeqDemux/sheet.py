@@ -341,64 +341,118 @@ class _SheetParse:
         return Sample(sample_id, tile, condition, timepoint, replicate)
 
     def groups(self, samples):
-        titles = self._find(L.INDEX)
-        if not titles:
-            self.problems.append("no %r section: nothing to demultiplex%s" % (L.INDEX, self._hint(L.INDEX)))
+        rows = self._index_rows()
+        if rows is None:
             return []
-        if len(titles) > 1:
-            self.problems.append("%r appears %d times (lines %s)" % (L.INDEX, len(titles), ", ".join(str(self.rows[i][1]) for i in titles)))
-            return []
-        t = titles[0]
-        if t > 0 and any(self.rows[t - 1][0]):
-            self.problems.append("line %d: the row above %r must be a row of empty cells (',,,,'), not %r; otherwise tsm csv2json "
-                                 "reads the section as part of the table above" % (self.rows[t][1], L.INDEX, ",".join(self.rows[t - 1][0])))
-        if t + 1 >= len(self.rows):
-            self.problems.append("%r has no header row (expected %s)" % (L.INDEX, ",".join(L.INDEX_HEADER)))
-            return []
-        header, hline = self.rows[t + 1]
-        if tuple(header[:2]) != L.INDEX_HEADER:
-            self.problems.append("line %d: the header under %r should be %s, found %s"
-                                 % (hline, L.INDEX, ",".join(L.INDEX_HEADER), ",".join(header[:2]) or "an empty row"))
-            return []
-        by_shared, seen_pairs, uniques = {}, set(), {}
-        for r, line in self._table(t + 1):
-            r = r + [""] * (2 - len(r))
-            shared, unique = r[0], r[1]
-            if unique == "":
-                self.problems.append("line %d: shared sample %s has no unique sample ID" % (line, shared))
-                continue
-            bad = self._bad_id(shared, "line %d" % line) | self._bad_id(unique, "line %d" % line)
-            if bad:
-                continue
-            if shared == unique:
-                self.problems.append("line %d: shared and unique sample ID are both %s" % (line, shared))
-                continue
-            if (shared, unique) in seen_pairs:
-                self.problems.append("line %d: the pair %s,%s is listed twice" % (line, shared, unique))
-                continue
-            seen_pairs.add((shared, unique))
-            for sid, role in ((shared, "shared"), (unique, "unique")):
-                if sid not in samples:
-                    self.problems.append("line %d: %s sample %s is not in the sample table" % (line, role, sid))
-            if unique in uniques:
-                self.problems.append("line %d: unique sample %s is already paired with shared sample %s on line %d"
-                                     % (line, unique, uniques[unique][0], uniques[unique][1]))
-                continue
-            uniques[unique] = (shared, line)
-            by_shared.setdefault(shared, []).append(unique)
-        for unique, (shared, line) in uniques.items():
-            if unique in by_shared:
-                self.problems.append("line %d: sample %s is a unique sample here and a shared sample elsewhere" % (line, unique))
-        groups = [IndexGroup(s, tuple(u)) for s, u in by_shared.items()]
-        for g in groups:
-            tiles_in = [samples[m].tile for m in g.members if m in samples]
-            dupes = sorted({x for x in tiles_in if tiles_in.count(x) > 1})
-            if dupes:
-                self.problems.append("samples %s share an index but tile %s appears more than once; tiles in one index must differ"
-                                     % (", ".join(g.members), ", ".join(dupes)))
-        if not groups and not any("section" in p for p in self.problems):
-            self.problems.append("the %r section lists no samples" % L.INDEX)
+        if not rows:
+            self.problems.append(f"the {L.INDEX!r} section lists no samples")
+        pairs = self._read_pairs(rows)
+        self._check_samples_exist(pairs, samples)
+        groups = self._build_groups(pairs)
+        self._check_group_tiles(groups, samples)
         return groups
+
+    def _index_rows(self):
+        """The data rows of the Index Samples section, or None after recording why the section cannot be read."""
+        titles = self._find(L.INDEX)
+        if len(titles) != 1:
+            self.problems.append(self._section_count_problem(titles))
+            return None
+        self._check_empty_row_above(titles[0])
+        header_problem = self._header_problem(titles[0])
+        if header_problem:
+            self.problems.append(header_problem)
+            return None
+        return self._table(titles[0] + 1)
+
+    def _section_count_problem(self, titles):
+        if not titles:
+            return f"no {L.INDEX!r} section: nothing to demultiplex{self._hint(L.INDEX)}"
+        lines = ", ".join(str(self.rows[index][1]) for index in titles)
+        return f"{L.INDEX!r} appears {len(titles)} times (lines {lines})"
+
+    def _check_empty_row_above(self, title_index):
+        """tsm csv2json ends a table at the first row with an empty first cell, so the section needs one above it."""
+        if title_index == 0:
+            return
+        cells_above, _line_number = self.rows[title_index - 1]
+        if any(cells_above):
+            _cells, title_line = self.rows[title_index]
+            above = ",".join(cells_above)
+            self.problems.append(f"line {title_line}: the row above {L.INDEX!r} must be a row of empty cells (',,,,'), not {above!r}; "
+                                 "otherwise tsm csv2json reads the section as part of the table above")
+
+    def _header_problem(self, title_index):
+        """Why the row under the title is not the expected header row, or None when it is."""
+        expected = ",".join(L.INDEX_HEADER)
+        if title_index + 1 >= len(self.rows):
+            return f"{L.INDEX!r} has no header row (expected {expected})"
+        cells, line_number = self.rows[title_index + 1]
+        if tuple(cells[:2]) != L.INDEX_HEADER:
+            found = ",".join(cells[:2]) or "an empty row"
+            return f"line {line_number}: the header under {L.INDEX!r} should be {expected}, found {found}"
+        return None
+
+    def _read_pairs(self, rows):
+        """(shared, unique, line_number) for every usable row of the section. Rows with a problem are reported and left out."""
+        pairs, seen, owners = [], set(), {}
+        for cells, line_number in rows:
+            shared, unique = self._padded(cells, 2)
+            problems = self._pair_problems(shared, unique, line_number, seen, owners)
+            self.problems += problems
+            if not problems:
+                pairs.append((shared, unique, line_number))
+                seen.add((shared, unique))
+                owners[unique] = (shared, line_number)
+        return pairs
+
+    def _pair_problems(self, shared, unique, line_number, seen, owners):
+        """What makes one row of the section unusable, as a list of messages. An empty list means the row is fine."""
+        where = f"line {line_number}"
+        if unique == "":
+            return [f"{where}: shared sample {shared} has no unique sample ID"]
+        id_problems = [self._id_problem(sample_id, where) for sample_id in (shared, unique)]
+        if any(id_problems):
+            return [problem for problem in id_problems if problem]
+        if shared == unique:
+            return [f"{where}: shared and unique sample ID are both {shared}"]
+        if (shared, unique) in seen:
+            return [f"{where}: the pair {shared},{unique} is listed twice"]
+        if unique in owners:
+            first_shared, first_line = owners[unique]
+            return [f"{where}: unique sample {unique} is already paired with shared sample {first_shared} on line {first_line}"]
+        return []
+
+    @staticmethod
+    def _mentions(pairs):
+        """Every (sample_id, role, line_number) the section mentions, row by row."""
+        for shared, unique, line_number in pairs:
+            yield shared, "shared", line_number
+            yield unique, "unique", line_number
+
+    def _check_samples_exist(self, pairs, samples):
+        """Every ID in the section must also be in the sample table, which gives it its tile."""
+        for sample_id, role, line_number in self._mentions(pairs):
+            if sample_id not in samples:
+                self.problems.append(f"line {line_number}: {role} sample {sample_id} is not in the sample table")
+
+    def _build_groups(self, pairs):
+        uniques_by_shared = {}
+        for shared, unique, _line_number in pairs:
+            uniques_by_shared.setdefault(shared, []).append(unique)
+        for _shared, unique, line_number in pairs:
+            if unique in uniques_by_shared:
+                self.problems.append(f"line {line_number}: sample {unique} is a unique sample here and a shared sample elsewhere")
+        return [IndexGroup(shared, tuple(uniques)) for shared, uniques in uniques_by_shared.items()]
+
+    def _check_group_tiles(self, groups, samples):
+        for group in groups:
+            tiles_used = [samples[member].tile for member in group.members if member in samples]
+            repeated = sorted(tile for tile, count in Counter(tiles_used).items() if count > 1)
+            if repeated:
+                self.problems.append(f"samples {', '.join(group.members)} share an index but tile {', '.join(repeated)} "
+                                     "appears more than once; tiles in one index must differ")
+
 
     def run(self):
         sequence = self.sequence()
