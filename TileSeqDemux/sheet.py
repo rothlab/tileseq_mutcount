@@ -305,28 +305,40 @@ class _SheetParse:
       return Tile(number, start_aa, end_aa)
 
     def samples(self, tiles):
-        i = self._once(L.SAMPLES, "sample table header row")
+        header_index = self._once(L.SAMPLES, "sample table header row")
+        if header_index is None:
+            return {}
+        self._check_second_column(header_index)
         samples = {}
-        if i is None:
-            return samples
-        header = self.rows[i][0] + [""] * 2
-        if header[1] != L.SAMPLES_SECOND_COLUMN:
-            self.problems.append("sample table: the second column should be %r, found %r" % (L.SAMPLES_SECOND_COLUMN, header[1]))
-        for r, line in self._table(i):
-            r = r + [""] * (5 - len(r))
-            sid, tile = r[0], r[1]
-            if self._bad_id(sid, "sample table line %d" % line):
-                continue
-            if sid in samples:
-                self.problems.append("sample table line %d: sample %s is listed twice" % (line, sid))
-                continue
-            if tiles and tile not in tiles:
-                self.problems.append("sample table line %d: sample %s uses tile %r, which is not in the tile table (tiles: %s)"
-                                     % (line, sid, tile, ", ".join(sorted(tiles, key=lambda t: (len(t), t)))))
-            samples[sid] = Sample(sid, tile, r[2], r[3], r[4])
+        for cells, line_number in self._table(header_index):
+            sample = self._read_sample(cells, line_number, samples, tiles)
+            if sample is not None:
+                samples[sample.sample_id] = sample
         if not samples:
-            self.problems.append("the sample table under %r is empty" % L.SAMPLES)
+            self.problems.append(f"the sample table under {L.SAMPLES!r} is empty")
         return samples
+
+    def _check_second_column(self, header_index):
+        cells, _line_number = self.rows[header_index]
+        found = self._padded(cells, 2)[1]
+        if found != L.SAMPLES_SECOND_COLUMN:
+            self.problems.append(f"sample table: the second column should be {L.SAMPLES_SECOND_COLUMN!r}, found {found!r}")
+
+    def _read_sample(self, cells, line_number, known_samples, tiles):
+        """One Sample from one row of the sample table, or None after recording what is wrong with the row."""
+        where = f"sample table line {line_number}"
+        sample_id, tile, condition, timepoint, replicate = self._padded(cells, 5)
+        id_problem = self._id_problem(sample_id, where)
+        if id_problem:
+            self.problems.append(id_problem)
+            return None
+        if sample_id in known_samples:
+            self.problems.append(f"{where}: sample {sample_id} is listed twice")
+            return None
+        if tiles and tile not in tiles:
+            known = ", ".join(sorted(tiles, key=lambda number: (len(number), number)))
+            self.problems.append(f"{where}: sample {sample_id} uses tile {tile!r}, which is not in the tile table (tiles: {known})")
+        return Sample(sample_id, tile, condition, timepoint, replicate)
 
     def groups(self, samples):
         titles = self._find(L.INDEX)
