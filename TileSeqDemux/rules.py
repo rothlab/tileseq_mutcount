@@ -12,33 +12,40 @@ Standard library only.
 import re
 import string
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Callable, List, NamedTuple
+
+BLOCKS = "blocks"
+REPORTS = "reports"
+WARNS = "warns"
+EFFECTS = (BLOCKS, REPORTS, WARNS)
 
 
 @dataclass(frozen=True)
 class Rule:
     """One thing that can be wrong with a row.
 
-    `broken_when(row, context)` returns True when the row breaks the rule. `blocks_row=False` means the problem is
-    reported but the row is kept."""
+    `broken_when(row, context)` returns True when the row breaks the rule."""
     name: str
     message: str
     broken_when: Callable
-    blocks_row: bool = True
+    effect: str = BLOCKS
 
 
 class Verdict(NamedTuple):
     names: List[str]          # the rules the row broke, in order
-    messages: List[str]       # their messages, filled in
-    blocked: bool             # True when the row must be left out
+    problems: List[str]       # their messages when the effect is BLOCKS or REPORTS
+    warnings: List[str]       # their messages when the effect is WARNS
+    blocked: bool             # True when the row must be left out or cannot be used
 
+class Facts(SimpleNamespace):
+    """The values a RuleSet needs, as keyword arguments: Facts(count=2, label='CDS end:')."""
+
+    def details(self, context=None):
+        return dict(vars(self))
 
 class RuleSet:
-    """The ordered rules for one kind of row.
-
-    Rules are tried in order. A broken rule that blocks the row ends the checking, so a later rule can rely on the
-    earlier ones (a range rule can assume the numbers were read). A broken rule that does not block records its
-    message and the checking goes on."""
+    """The ordered rules for one kind of thing. Rules are tried in order and the effect of a broken rule decides what follows."""
 
     def __init__(self, rules, details):
         self.rules = tuple(rules)
@@ -48,14 +55,18 @@ class RuleSet:
     def check(self, row, context):
         """Apply the rules to `row`. `context` is whatever the rules need to know about the other rows."""
         details = row.details(context)
-        names, messages = [], []
+        missing = self._details - set(details)
+        if missing:
+            raise KeyError(f"the thing being checked does not provide {sorted(missing)}")
+        names, problems,warnings = [], [], []
         for rule in self.rules:
-            if rule.broken_when(row, context):
-                names.append(rule.name)
-                messages.append(rule.message.format(**details))
-                if rule.blocks_row:
-                    return Verdict(names, messages, True)
-        return Verdict(names, messages, False)
+            if not rule.broken_when(row, context):
+                continue
+            names.append(rule.name)
+            (warnings if rule.effect == WARNS else problems).append(rule.message.format(**details))
+            if rule.effect == BLOCKS:
+                return Verdict(names, problems, warnings, blocked=True)
+        return Verdict(names, problems, warnings, blocked=False)
 
     def _validate(self):
         names = [rule.name for rule in self.rules]
@@ -63,9 +74,11 @@ class RuleSet:
         if repeated:
             raise ValueError(f"rule names must be unique, repeated: {repeated}")
         for rule in self.rules:
+            if rule.effect not in EFFECTS:
+                raise ValueError(f"rule {rule.name!r} has effect {rule.effect!r}; it must be one of {EFFECTS}")
             unknown = self._placeholders(rule.message) - self._details
             if unknown:
-                raise ValueError(f"rule {rule.name!r} uses {sorted(unknown)}, which the row does not provide")
+                raise ValueError(f"rule {rule.name!r} uses {sorted(unknown)}, which the thing being checked does not provide")
 
     @staticmethod
     def _placeholders(message):
