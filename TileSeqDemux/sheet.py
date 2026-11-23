@@ -18,6 +18,11 @@ The shared ID is the sample whose FASTQ files hold both tiles; the unique ID nam
 must also be listed in the ordinary sample table, which gives each one its tile. The row of empty cells above the
 section is required: without it `tsm csv2json` reads the section as part of the table above.
 
+The section is optional. A sheet without it is not an error: no samples share an index, so there is nothing to
+demultiplex, and the reader returns a ParameterSheet with no groups and a warning that says so. What to do with such a
+sheet is for the command to decide. A label that is only spelled differently, such as `index samples`, is still an
+error, because that is more likely a typo than an absence.
+
 There are two ways to check something, and the difference is whether the code that follows depends on the result:
     _record_problem_if(condition, message)   only records a problem; nothing below depends on it
     _check(rule_set, subject)                applies ordered rules and returns a Verdict to act on:
@@ -37,7 +42,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from TileSeqDemux.rules import REPORTS, WARNS, Facts, Rule, RuleSet
+from TileSeqDemux.rules import REPORTS, SKIPS, WARNS, Facts, Rule, RuleSet
 
 ID_PATTERN = re.compile(r"^[^_\s/\\]+$")      # the sample ID is the first "_" token of a FASTQ name, so no "_"
 
@@ -128,6 +133,11 @@ class ParameterSheet:
     warnings: List[str] = field(default_factory=list)
 
     @property
+    def needs_demultiplexing(self):
+        """False when no samples share an index, so there is nothing for tileseq_demux to do."""
+        return bool(self.groups)
+    
+    @property
     def shared_ids(self):
         """The sample IDs whose FASTQ files hold the pooled reads, one per index group."""
         return [group.shared for group in self.groups]
@@ -144,6 +154,8 @@ class ParameterSheet:
         """Human-readable lines: each index group, its tiles and their geometry."""
         cover = self.min_cover if min_cover is None else min_cover
         lines = [f"minimum coverage {cover}, CDS start {self.cds_start}"]
+        if not self.groups:
+          lines.append("no samples share an index: nothing to demultiplex")
         for group in self.groups:
             lines += self._describe_group(group, cover)
         return lines
@@ -302,10 +314,13 @@ LOOKUP_RULES = RuleSet(              # a labelled row that must appear exactly o
         REPEATED_LABEL,
     ])
 
-INDEX_LOOKUP_RULES = RuleSet(        # the title row of the Index Samples section
+INDEX_LOOKUP_RULES = RuleSet(        # the title row of the Index Samples section, which is optional
     details=("label", "count", "lines", "hint"),
     rules=[
-        Rule("missing", "no {label!r} section: nothing to demultiplex{hint}", lambda facts, context: facts.count == 0),
+        Rule("misspelled", "no {label!r} section{hint}",
+             lambda facts, context: facts.count == 0 and facts.hint != ""),
+        Rule("absent", "no {label!r} section: no samples share an index, so there is nothing to demultiplex",
+             lambda facts, context: facts.count == 0, effect=SKIPS),
         REPEATED_LABEL,
     ])
 

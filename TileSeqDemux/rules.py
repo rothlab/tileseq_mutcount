@@ -1,13 +1,21 @@
-"""Small objects that say what can be wrong with one row of a table, so that a new check is one new Rule.
 
-    Rule      one thing that can be wrong: its name, the message to show, and the test that finds it
-    RuleSet   the ordered rules for one kind of row, and the code that applies them
-    Verdict   what applying a RuleSet to one row found
-
-A row class gives a RuleSet what it needs by providing `details(context)`, a dict of the values the messages can use.
-The messages are written with {placeholders}, and a RuleSet is told which placeholders the row provides, so a typo in
-a message or a repeated rule name is an error when the module loads, not when a rare bad row finally turns up.
-Standard library only.
+"""Small objects that say what can be wrong with something being read, so that a new check is one new Rule.
+ 
+    Rule      one thing that can be wrong: its name, the message to show, the test that finds it, and its effect
+    RuleSet   the ordered rules for one kind of thing, and the code that applies them
+    Verdict   what applying a RuleSet found
+    Facts     the values a RuleSet needs, for things that have no class of their own
+ 
+What happens when a rule is broken is its `effect`:
+    BLOCKS    a problem, and the checking of this thing stops, so later rules can rely on earlier ones
+    REPORTS   a problem, and the checking goes on
+    WARNS     a warning, not a problem: the checking goes on and the thing stays usable
+    SKIPS     a warning, not a problem, and the checking stops: the thing is left out, as an optional part that is absent
+ 
+A thing to be checked gives its RuleSet what it needs by providing `details(context)`, a dict of the values the messages
+can use. The messages are written with {placeholders}, and a RuleSet is told which placeholders to expect, so a typo in a
+message, a repeated rule name or a value that was never provided is an error as soon as it is seen, not when a rare bad
+sheet finally turns up. Standard library only.
 """
 import re
 import string
@@ -18,7 +26,10 @@ from typing import Callable, List, NamedTuple
 BLOCKS = "blocks"
 REPORTS = "reports"
 WARNS = "warns"
-EFFECTS = (BLOCKS, REPORTS, WARNS)
+SKIPS = "skips"
+EFFECTS = (BLOCKS, REPORTS, WARNS, SKIPS)
+WARNING_EFFECTS = (WARNS, SKIPS)     # recorded as warnings
+STOPPING_EFFECTS = (BLOCKS, SKIPS)   # the rest of the rules are not tried
 
 
 @dataclass(frozen=True)
@@ -63,8 +74,8 @@ class RuleSet:
             if not rule.broken_when(subject, context):
                 continue
             names.append(rule.name)
-            (warnings if rule.effect == WARNS else problems).append(rule.message.format(**details))
-            if rule.effect == BLOCKS:
+            (warnings if rule.effect in WARNING_EFFECTS else problems).append(rule.message.format(**details))
+            if rule.effect in STOPPING_EFFECTS:
                 return Verdict(names, problems, warnings, blocked=True)
         return Verdict(names, problems, warnings, blocked=False)
 

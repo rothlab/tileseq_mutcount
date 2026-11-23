@@ -17,7 +17,7 @@ from unittest import mock
 
 from TileSeqDemux import validation as V
 from TileSeqDemux.sheet import SheetReader
-from test_demux_sheet import make_sheet      # tests/ is on sys.path under both pytest and unittest
+from test_demux_sheet import make_sheet, swap      # tests/ is on sys.path under both pytest and unittest
 
 
 def done(returncode=0, out=""):
@@ -41,6 +41,9 @@ def which_in(*present):
 GOOD_TOOLS = {("bowtie2", "--version"): done(0, "bowtie2-align-s version 2.5.5\n"),
               ("bowtie2-build", "--version"): done(0, "bowtie2-build-s version 2.5.5\n")}
 
+def bad_sheet():
+    """A sheet with one clear problem: the CDS start has no value."""
+    return swap(make_sheet(), "CDS start:,111,,,", "CDS start:,,,,")
 
 def good_tool_checker():
     return V.ToolChecker(run=fake_run(GOOD_TOOLS), which=which_in("bowtie2", "bowtie2-build"))
@@ -245,13 +248,13 @@ class ValidatorTests(unittest.TestCase):
         self.assertIn("inherits the environment", str(ctx.exception))
 
     def test_tool_and_sheet_problems_arrive_together(self):
-        self.write_sheet(make_sheet(index=False))
+        self.write_sheet(bad_sheet())
         with self.assertRaises(V.InputValidationError) as ctx:
             self.validator(missing_tool_checker()).validate()
         heads = self.headings(ctx.exception)
         self.assertEqual(heads[0], "Tools")
         self.assertTrue(heads[1].startswith("Parameter sheet"))
-        self.assertIn("nothing to demultiplex", str(ctx.exception))
+        self.assertIn("has no value", str(ctx.exception))
         self.assertIn("not checked until the parameter sheet is valid", str(ctx.exception))
 
     def test_tool_and_folder_problems_arrive_together(self):
@@ -279,12 +282,31 @@ class ValidatorTests(unittest.TestCase):
         self.assertIn("nope.csv", str(ctx.exception))
 
     def test_the_message_has_a_heading_per_section(self):
-        self.write_sheet(make_sheet(index=False))
+        self.write_sheet(bad_sheet())
         with self.assertRaises(V.InputValidationError) as ctx:
             self.validator(missing_tool_checker()).validate()
         text = str(ctx.exception)
         self.assertTrue(text.startswith("tileseq_demux cannot start."))
         self.assertIn("\nTools\n  - ", text)
+
+    def test_a_sheet_with_nothing_to_split_is_valid(self):
+        self.write_sheet(make_sheet(index=False))                    # no section, and no FASTQ files in the folder
+        sheet = self.validator().validate()
+        self.assertFalse(sheet.needs_demultiplexing)
+        self.assertTrue(any("nothing to demultiplex" in warning for warning in sheet.warnings))
+
+    def test_the_tools_are_still_checked_when_there_is_nothing_to_split(self):
+        self.write_sheet(make_sheet(index=False))
+        with self.assertRaises(V.InputValidationError) as ctx:
+            self.validator(missing_tool_checker()).validate()
+        self.assertEqual(self.headings(ctx.exception), ["Tools"])
+
+    def test_the_folder_must_still_exist_when_there_is_nothing_to_split(self):
+        self.write_sheet(make_sheet(index=False))
+        self.fastq = os.path.join(self.dir.name, "no_such_folder")
+        with self.assertRaises(V.InputValidationError) as ctx:
+            self.validator().validate()
+        self.assertIn("does not exist", str(ctx.exception))
 
     def test_warnings_survive_on_the_returned_sheet(self):
         self.write_sheet(make_sheet().replace("Minimum coverage:,0.9,,,\n", ""))
@@ -309,15 +331,44 @@ class ValidatorTests(unittest.TestCase):
 
 
 class DeveloperCommandTests(unittest.TestCase):
-    def test_exit_codes(self):
-        with tempfile.TemporaryDirectory() as d:
-            sheet_path = os.path.join(d, "sheet.csv")
-            with open(sheet_path, "w") as fh:
-                fh.write(make_sheet(index=False))
-            with contextlib.redirect_stderr(io.StringIO()):          # the error text is not what is being tested
-                self.assertEqual(V.main([sheet_path, d]), 1)         # no Index Samples section (and real tools may be absent too)
-                self.assertEqual(V.main([os.path.join(d, "nope.csv"), d]), 1)
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.sheet_path = os.path.join(self.dir.name, "sheet.csv")
 
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def run_command(self, sheet_text, files=()):
+        with open(self.sheet_path, "w") as fh:
+            fh.write(sheet_text)
+        for name in files:
+            open(os.path.join(self.dir.name, name), "w").close()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = V.main([self.sheet_path, self.dir.name], tool_checker=good_tool_checker())
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_good_sheet_prints_the_plan_and_exits_0(self):
+        code, out, _err = self.run_command(make_sheet(), ["97_S97_R1_001.fastq.gz", "97_S97_R2_001.fastq.gz", "98_S98_R1_001.fastq.gz", "98_S98_R2_001.fastq.gz"])
+        self.assertEqual(code, 0)
+        self.assertIn("index shared by 2 samples", out)
+
+    def test_a_sheet_with_nothing_to_split_says_so_and_exits_0(self):
+        code, out, _err = self.run_command(make_sheet(index=False))
+        self.assertEqual(code, 0)
+        self.assertIn("nothing to demultiplex", out)
+
+    def test_a_bad_sheet_exits_1_and_lists_the_problem(self):
+        code, _out, err = self.run_command(bad_sheet())
+        self.assertEqual(code, 1)
+        self.assertIn("has no value", err)
+
+    def test_a_missing_sheet_file_exits_1(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = V.main([os.path.join(self.dir.name, "nope.csv"), self.dir.name], tool_checker=good_tool_checker())
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read", err.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

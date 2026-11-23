@@ -82,6 +82,18 @@ class ReadTests(unittest.TestCase):
             os.unlink(fh.name)
         self.assertEqual(sh.groups[0].unique, ("193",))
 
+    def test_a_sheet_without_the_section_has_nothing_to_demultiplex(self):
+        sheet = S.SheetReader().parse(make_sheet(index=False))
+        self.assertEqual(sheet.groups, [])
+        self.assertFalse(sheet.needs_demultiplexing)
+        self.assertEqual((sheet.shared_ids, sheet.unique_ids), ([], []))
+        self.assertTrue(any("nothing to demultiplex" in warning for warning in sheet.warnings), sheet.warnings)
+        self.assertEqual(len(sheet.tiles), 12)                      # the rest of the sheet is still read and checked
+        self.assertIn("nothing to demultiplex", " ".join(sheet.describe()))
+
+    def test_a_sheet_with_the_section_needs_demultiplexing(self):
+        self.assertTrue(S.SheetReader().parse(make_sheet()).needs_demultiplexing)
+
     def test_index_section_can_sit_at_the_end_of_the_file(self):
         text = make_sheet(index=False) + ",,,,\nIndex Samples,,,,\nShared Sample ID,Unique Sample ID,,,\n97,193,,,\n98,194"
         sh = S.SheetReader().parse(text)
@@ -149,8 +161,15 @@ class ProblemTests(unittest.TestCase):
     def test_underscore_in_a_sample_id(self):
         self.assertProblem(swap(make_sheet(), "194,11,QC,1,1", "19_4,11,QC,1,1"), "must not be empty or contain '_'")
 
-    def test_no_index_section(self):
-        self.assertProblem(make_sheet(index=False), "nothing to demultiplex")
+    def test_a_missing_section_does_not_hide_other_problems(self):
+        problems = self.problems(swap(make_sheet(index=False), "CDS start:,111,,,", "CDS start:,,,,"))
+        self.assertTrue(any("has no value" in p for p in problems))
+        self.assertFalse(any("Index Samples" in p for p in problems))
+
+    def test_a_misspelled_section_label_is_an_error_not_a_no_op(self):
+        problems = self.problems(swap(make_sheet(), "Index Samples,,,,", "index samples,,,,"))
+        self.assertTrue(any(p.startswith("no 'Index Samples' section (found 'index samples' on line") for p in problems), problems)
+        self.assertFalse(any("nothing to demultiplex" in p for p in problems))
 
     def test_row_above_the_section_must_be_empty_cells(self):
         text = make_sheet(extra_before_index="Replicate notes,x,,,")
@@ -215,13 +234,13 @@ class ProblemTests(unittest.TestCase):
 
     def test_error_message_lists_the_problems(self):
         with self.assertRaises(S.SheetError) as ctx:
-            S.SheetReader().parse(make_sheet(index=False), path="x.csv")
+            S.SheetReader().parse(swap(make_sheet(), "CDS start:,111,,,", "CDS start:,,,,"), path="x.csv")
         self.assertIn("in x.csv", str(ctx.exception))
         self.assertIn("  - ", str(ctx.exception))
 
 
-def lookup(count):
-    return Facts(label="Sequence:", what="row", count=count, lines="3, 9", hint="")
+def lookup(count, hint=""):
+    return Facts(label="Sequence:", what="row", count=count, lines="3, 9", hint=hint)
 
 
 def integer(text, minimum=1):
@@ -269,7 +288,8 @@ class RuleTests(unittest.TestCase):
             (S.LOOKUP_RULES, lookup(0), None, ["missing"], True),
             (S.LOOKUP_RULES, lookup(2), None, ["repeated"], True),
             (S.LOOKUP_RULES, lookup(1), None, [], False),
-            (S.INDEX_LOOKUP_RULES, lookup(0), None, ["missing"], True),
+            (S.INDEX_LOOKUP_RULES, lookup(0), None, ["absent"], True),
+            (S.INDEX_LOOKUP_RULES, lookup(0, hint=" (found 'index samples' on line 31; labels must match exactly)"), None, ["misspelled"], True),
             (S.INDEX_LOOKUP_RULES, lookup(2), None, ["repeated"], True),
             (S.INDEX_LOOKUP_RULES, lookup(1), None, [], False),
             (S.INTEGER_RULES, integer("abc"), None, ["not_whole"], True),
@@ -320,6 +340,16 @@ class RuleTests(unittest.TestCase):
         context = S.PairContext(seen=set(), owners={"193": ("96", 4)})
         message = S.PAIR_RULES.check(S.PairRow("98", "193"), context).problems[0]
         self.assertEqual(message, "unique sample 193 is already paired with shared sample 96 on line 4")
+
+    def test_an_absent_section_is_a_warning_that_stops_the_reading_not_a_problem(self):
+        verdict = S.INDEX_LOOKUP_RULES.check(lookup(0))
+        self.assertEqual((verdict.problems, verdict.blocked), ([], True))
+        self.assertTrue(verdict.warnings[0].endswith("no samples share an index, so there is nothing to demultiplex"))
+
+    def test_a_misspelled_section_label_is_a_problem_with_a_hint(self):
+        verdict = S.INDEX_LOOKUP_RULES.check(lookup(0, hint=" (found 'index samples' on line 31; labels must match exactly)"))
+        self.assertEqual((verdict.warnings, verdict.blocked), ([], True))
+        self.assertEqual(verdict.problems, ["no 'Sequence:' section (found 'index samples' on line 31; labels must match exactly)"])
 
     def test_the_cds_length_check_is_a_warning_not_a_problem(self):
         verdict = S.CDS_RULES.check(cds(start=100, end=1300, cds_length=1201))

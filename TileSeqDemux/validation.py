@@ -203,19 +203,19 @@ class DemuxInputsValidator:
         return self._folder.check(sheet, self._fastq_dir)
 
 
-def main(argv=None):
+def main(argv=None, tool_checker=None):
     parser = argparse.ArgumentParser(description="Developer check: validate a sheet and FASTQ folder and print the plan.")
     parser.add_argument("sheet")
     parser.add_argument("fastq_dir")
     parser.add_argument("--min-cover", type=float, help="override the sheet's Minimum coverage in the printed plan")
     args = parser.parse_args(argv)
     try:
-        sheet = DemuxInputsValidator(args.sheet, args.fastq_dir).validate()
+      sheet = DemuxInputsValidator(args.sheet, args.fastq_dir, tool_checker=tool_checker).validate()
     except InputValidationError as err:
-        print(err, file=sys.stderr)
-        return 1
+      print(err, file=sys.stderr)
+      return 1
     for warning in sheet.warnings:
-        print("warning:", warning)
+      print("warning:", warning)
     print("\n".join(sheet.describe(args.min_cover)))
     return 0
 

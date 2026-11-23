@@ -10,7 +10,7 @@ Without pytest: python -m unittest discover -s tests -p "test_demux_*.py"
 import dataclasses
 import unittest
 
-from TileSeqDemux.rules import BLOCKS, REPORTS, WARNS, Facts, Rule, RuleSet, Verdict
+from TileSeqDemux.rules import BLOCKS, REPORTS, SKIPS, WARNS, Facts, Rule, RuleSet, Verdict
 
 
 class Row:
@@ -29,6 +29,7 @@ TOO_BIG = Rule("too_big", "{value} is above {limit}", lambda row, limit: row.val
 NEGATIVE = Rule("negative", "{value} is negative", lambda row, limit: row.value < 0)
 ODD = Rule("odd", "{value} is odd", lambda row, limit: row.value % 2 == 1, effect=REPORTS)
 LONG = Rule("long", "{value} has more than one digit", lambda row, limit: row.value >= 10, effect=WARNS)
+ABSENT = Rule("absent", "{value} is absent", lambda row, limit: row.value is None, effect=SKIPS)
 
 
 class CheckTests(unittest.TestCase):
@@ -72,6 +73,15 @@ class CheckTests(unittest.TestCase):
     def test_a_warning_and_a_problem_can_come_from_one_row(self):
         verdict = make_rules(LONG, TOO_BIG).check(Row(12), 5)
         self.assertEqual((verdict.problems, verdict.warnings, verdict.blocked), (["12 is above 5"], ["12 has more than one digit"], True))
+
+    def test_a_skipping_rule_is_a_warning_that_stops_the_checking(self):
+        """Nothing is wrong, but the thing is left out: TOO_BIG would raise TypeError on None, so it must not run."""
+        verdict = make_rules(ABSENT, TOO_BIG).check(Row(None), 10)
+        self.assertEqual((verdict.names, verdict.problems, verdict.warnings, verdict.blocked),
+                         (["absent"], [], ["None is absent"], True))
+
+    def test_a_skipping_rule_that_is_not_broken_changes_nothing(self):
+        self.assertEqual(make_rules(ABSENT, TOO_BIG).check(Row(4), 10), Verdict([], [], [], False))
 
     def test_the_context_reaches_the_rules_and_the_messages(self):
         self.assertEqual(make_rules(TOO_BIG).check(Row(5), 3).problems, ["5 is above 3"])
