@@ -226,12 +226,13 @@ class _SheetParse:
         """Rows after a header row, up to the first row with an empty first cell (where tsm csv2json ends a table)."""
         return list(itertools.takewhile(self._has_first_cell, self.rows[header_index + 1:]))
 
-    def _bad_id(self, value, where):
-        if not ID_PATTERN.match(value):
-            self.problems.append("%s: sample ID %r must not be empty or contain '_', spaces or slashes "
-                                 "(the sample ID is the first '_' token of the FASTQ file name)" % (where, value))
-            return True
-        return False
+    @staticmethod
+    def _id_problem(sample_id, where):
+        """Why `sample_id` cannot be a sample ID, or None when it can."""
+        if ID_PATTERN.match(sample_id):
+            return None
+        return (f"{where}: sample ID {sample_id!r} must not be empty or contain '_', spaces or slashes "
+                "(the sample ID is the first '_' token of the FASTQ file name)")
 
     # -- sections --------------------------------------------------------------------------------------------
     def sequence(self):
