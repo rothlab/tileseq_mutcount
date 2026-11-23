@@ -52,15 +52,15 @@ class RuleSet:
         self._details = frozenset(details)
         self._validate()
 
-    def check(self, row, context):
-        """Apply the rules to `row`. `context` is whatever the rules need to know about the other rows."""
-        details = row.details(context)
+    def check(self, subject, context=None):
+        """Apply the rules to `subject`. `context` is whatever the rules need to know about the other rows."""
+        details = subject.details(context)
         missing = self._details - set(details)
         if missing:
             raise KeyError(f"the thing being checked does not provide {sorted(missing)}")
         names, problems,warnings = [], [], []
         for rule in self.rules:
-            if not rule.broken_when(row, context):
+            if not rule.broken_when(subject, context):
                 continue
             names.append(rule.name)
             (warnings if rule.effect == WARNS else problems).append(rule.message.format(**details))

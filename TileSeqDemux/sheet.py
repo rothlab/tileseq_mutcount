@@ -242,7 +242,7 @@ SAMPLE_RULES = RuleSet(
              lambda row, context: row.sample_id in context.known_samples),
         Rule("unknown_tile", "sample {sample_id} uses tile {tile!r}, which is not in the tile table (tiles: {known_tiles})",
              lambda row, context: bool(context.tiles) and row.tile not in context.tiles,
-             blocks_row=False),                       # reported, but the sample is kept
+             effect=REPORTS),                       # reported, but the sample is kept
     ])
 
 
@@ -385,6 +385,9 @@ class _SheetParse:
     def _find(self, label):
         """Indexes of the rows whose first cell is exactly `label`."""
         return [index for index, (cells, _line_number) in enumerate(self.rows) if cells and cells[0] == label]
+
+    def _lines(self, row_indexes):
+      return ", ".join(str(self.rows[index][1]) for index in row_indexes)
 
     def _hint(self, label):
         """A hint for a label that is present but written with different capitals, such as 'index samples'."""
