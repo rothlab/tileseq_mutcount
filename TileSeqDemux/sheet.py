@@ -274,29 +274,35 @@ class _SheetParse:
         return cover
 
     def tiles(self):
-        i = self._once(L.TILES, "tile table header row")
-        tiles = {}
-        if i is None:
-            return tiles
-        rows = self._table(i)
+        header_index = self._once(L.TILES, "tile table header row")
+        if header_index is None:
+            return {}
+        rows = self._table(header_index)
         if not rows:
-            self.problems.append("the tile table under %r is empty" % L.TILES)
-        for r, line in rows:
-            r = r + [""] * (3 - len(r))
-            start, end = r[1], r[2]
-            try:
-                s_aa, e_aa = int(start), int(end)
-            except ValueError:
-                self.problems.append("tile table line %d: start and end amino acids must be whole numbers, found %r and %r" % (line, start, end))
-                continue
-            if s_aa < 1 or e_aa < s_aa:
-                self.problems.append("tile table line %d: tile %s has start %d and end %d; need 1 <= start <= end" % (line, r[0], s_aa, e_aa))
-                continue
-            if r[0] in tiles:
-                self.problems.append("tile table line %d: tile %s is listed twice" % (line, r[0]))
-                continue
-            tiles[r[0]] = Tile(r[0], s_aa, e_aa)
+            self.problems.append(f"the tile table under {L.TILES!r} is empty")
+        tiles = {}
+        for cells, line_number in rows:
+            tile = self._read_tile(cells, line_number, tiles)
+            if tile is not None:
+                tiles[tile.number] = tile
         return tiles
+
+    def _read_tile(self, cells, line_number, known_tiles):
+      """One Tile from one row of the tile table, or None after recording what is wrong with the row."""
+      where = f"tile table line {line_number}"
+      number, start_text, end_text = self._padded(cells, 3)
+      try:
+          start_aa, end_aa = int(start_text), int(end_text)
+      except ValueError:
+          self.problems.append(f"{where}: start and end amino acids must be whole numbers, found {start_text!r} and {end_text!r}")
+          return None
+      if start_aa < 1 or end_aa < start_aa:
+          self.problems.append(f"{where}: tile {number} has start {start_aa} and end {end_aa}; need 1 <= start <= end")
+          return None
+      if number in known_tiles:
+          self.problems.append(f"{where}: tile {number} is listed twice")
+          return None
+      return Tile(number, start_aa, end_aa)
 
     def samples(self, tiles):
         i = self._once(L.SAMPLES, "sample table header row")
