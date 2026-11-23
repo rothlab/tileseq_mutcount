@@ -23,8 +23,10 @@ Nothing in this package imports TileSeqMut.
 """
 import csv
 import io
+import itertools
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -209,14 +211,20 @@ class _SheetParse:
             return None
         return number
 
+    @staticmethod
+    def _padded(cells, width):
+        """The first 'width' cells of a row, padded with empty strings if the row is shorter."""
+        return (cells + [""] *width)[:width]
+
+
+    @staticmethod
+    def _has_first_cell(row):
+        cells, _line_number = row
+        return bool(cells) and cells[0] != ""
+
     def _table(self, header_index):
         """Rows after a header row, up to the first row with an empty first cell (where tsm csv2json ends a table)."""
-        out = []
-        for r, line in self.rows[header_index + 1:]:
-            if not r or r[0] == "":
-                break
-            out.append((r, line))
-        return out
+        return list(itertools.takewhile(self._has_first_cell, self.rows[header_index + 1:]))
 
     def _bad_id(self, value, where):
         if not ID_PATTERN.match(value):
