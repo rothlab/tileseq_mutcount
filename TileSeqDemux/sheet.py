@@ -259,6 +259,20 @@ class _SheetParse:
             return L.DEFAULT_MIN_COVER
         return self._parse_min_cover(text)
 
+    def _second_cell(self, row_index):
+        cells, _line_number = self.rows[row_index]
+        return cells[1] if len(cells) > 1 else ""
+
+    def _parse_min_cover(self, text):
+        try:
+            cover = float(text)
+        except ValueError:
+            self.problems.append(f"{L.MIN_COVER!r} should be a number, found {text!r}")
+            return L.DEFAULT_MIN_COVER
+        if not 0 < cover <= 1:
+            self.problems.append(f"{L.MIN_COVER!r} should be above 0 and at most 1, found {text}")
+        return cover
+
     def tiles(self):
         i = self._once(L.TILES, "tile table header row")
         tiles = {}
