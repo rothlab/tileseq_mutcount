@@ -249,22 +249,15 @@ class _SheetParse:
         return seq
 
     def min_cover(self):
-        hits = self._find(L.MIN_COVER)
-        if len(hits) > 1:
-            self.problems.append("%r appears %d times" % (L.MIN_COVER, len(hits)))
+        rows_found = self._find(L.MIN_COVER)
+        if len(rows_found) > 1:
+            self.problems.append(f"{L.MIN_COVER!r} appears {len(rows_found)} times")
             return L.DEFAULT_MIN_COVER
-        value = self.rows[hits[0]][0][1] if hits and len(self.rows[hits[0]][0]) > 1 else ""
-        if not hits or value == "":
-            self.warnings.append("no %r value: using %s, as tsm csv2json does" % (L.MIN_COVER, L.DEFAULT_MIN_COVER))
+        text = self._second_cell(rows_found[0]) if rows_found else ""
+        if text == "":
+            self.warnings.append(f"no {L.MIN_COVER!r} value: using {L.DEFAULT_MIN_COVER}, as tsm csv2json does")
             return L.DEFAULT_MIN_COVER
-        try:
-            cover = float(value)
-        except ValueError:
-            self.problems.append("%r should be a number, found %r" % (L.MIN_COVER, value))
-            return L.DEFAULT_MIN_COVER
-        if not 0 < cover <= 1:
-            self.problems.append("%r should be above 0 and at most 1, found %s" % (L.MIN_COVER, value))
-        return cover
+        return self._parse_min_cover(text)
 
     def tiles(self):
         i = self._once(L.TILES, "tile table header row")
