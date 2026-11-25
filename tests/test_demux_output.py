@@ -73,7 +73,9 @@ class PlanTests(unittest.TestCase):
         lines = self.build().describe()
         self.assertEqual(lines[0], "job 97: reads 97_S97_R1_001.fastq.gz and 97_S97_R2_001.fastq.gz")
         self.assertEqual(lines[1], "  writes " + ", ".join(TILE_97))
-        self.assertEqual(lines[-1], "4 links to raw files (unshared samples and other FASTQ files)")
+        self.assertEqual(lines[-2], "links to raw files (unshared samples and other FASTQ files): 4")
+        for name in (O.MANIFEST_NAME, O.LOGS_NAME, O.MARKER_NAME):
+            self.assertIn(name, lines[-1])
 
     def test_the_plan_survives_a_round_trip_through_json(self):
         plan = self.build()
