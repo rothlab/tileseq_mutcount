@@ -174,6 +174,17 @@ class ReaderTests(FastqTestCase):
         with self.assertRaises(FileNotFoundError):
             self.read_all(self.path("nope.fastq.gz"), r2_path)
 
+    def test_a_failed_open_closes_the_file_that_was_already_open(self):
+        reader = F.FastqPairReader(self.write_gz("r1.fastq.gz", [record(b"a")]), self.path("missing.fastq.gz"))
+        with self.assertRaises(FileNotFoundError):
+            reader.__enter__()
+        self.assertTrue(reader._r1._handle.closed)
+
+    def test_pairs_without_a_with_block_says_what_to_do(self):
+        r1_path, r2_path = self.pair_files([record(b"a")], [record(b"a")])
+        with self.assertRaisesRegex(ValueError, "with block"):
+            list(F.FastqPairReader(r1_path, r2_path).pairs())
+
     def test_the_files_are_closed_when_the_reader_is_left(self):
         r1_path, r2_path = self.pair_files([record(b"a")], [record(b"a")])
         with F.FastqPairReader(r1_path, r2_path) as reader:
@@ -224,6 +235,11 @@ class WriterTests(FastqTestCase):
         with F.TileOutputs(self.outputs_for("97")) as outputs:
             with self.assertRaises(KeyError):
                 outputs.write("999", self.pair())
+
+    def test_writing_before_the_outputs_are_opened_says_what_to_do(self):
+        outputs = F.TileOutputs(self.outputs_for("97"))
+        with self.assertRaisesRegex(ValueError, "with block"):
+            outputs.write("97", self.pair())
 
     def test_the_files_are_valid_gzip_even_if_the_job_failed(self):
         paths = self.outputs_for("97")

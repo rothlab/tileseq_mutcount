@@ -40,6 +40,10 @@ class _MateStream:
         self._handle = None
         self._readline = None
 
+    @property
+    def is_open(self):
+        return self._handle is not None
+
     def open(self):
         self._handle = gzip.open(self.path, "rb")
         self._readline = self._handle.readline
@@ -105,6 +109,8 @@ class FastqPairReader:
 
     def pairs(self):
         """Yield a ReadPair for every pair, in file order. Pairs are counted from 1 in the messages."""
+        if not (self._r1.is_open and self._r2.is_open):
+            raise ValueError("the files are not open: use FastqPairReader in a with block")
         for number in itertools.count(1):
             first, second = self._r1.read(number), self._r2.read(number)
             if first is None and second is None:
@@ -150,7 +156,12 @@ class TileOutputs:
 
     def write(self, key, pair):
         """Write a pair's R1 record to the key's R1 file and its R2 record to the R2 file."""
-        r1_file, r2_file = self._handles[key]
+        try:
+            r1_file, r2_file = self._handles[key]
+        except KeyError:
+            if key in self._paths:
+                raise ValueError("the outputs are not open: use TileOutputs in a with block") from None
+            raise
         r1_file.write(pair.r1)
         r2_file.write(pair.r2)
         self.counts[key] += 1
