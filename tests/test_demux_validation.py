@@ -205,6 +205,56 @@ class FolderTests(unittest.TestCase):
     def test_missing_folder(self):
         self.assertIn("does not exist", self.checker.check(self.sheet, os.path.join(self.dir.name, "nope"))[0])
 
+class OutputFolderCheckerTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self.dir.name)
+        self.raw = os.path.join(self.root, "raw")
+        os.mkdir(self.raw)
+        self.checker = V.OutputFolderChecker()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_a_new_folder_next_to_the_raw_folder_is_fine(self):
+        self.assertEqual(self.checker.check(self.raw, os.path.join(self.root, "demux")), [])
+
+    def test_an_existing_folder_is_fine_here_because_what_to_do_with_it_is_decided_later(self):
+        os.mkdir(os.path.join(self.root, "demux"))
+        self.assertEqual(self.checker.check(self.raw, os.path.join(self.root, "demux")), [])
+
+    def test_the_raw_folder_itself_is_refused_and_the_message_says_why(self):
+        problems = self.checker.check(self.raw, self.raw)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("same folder as the raw FASTQ folder", problems[0])
+        self.assertIn("overwrite", problems[0])
+
+    def test_the_raw_folder_under_another_spelling_is_refused(self):
+        self.assertEqual(len(self.checker.check(self.raw, self.raw + os.sep)), 1)
+        self.assertEqual(len(self.checker.check(self.raw, os.path.join(self.raw, "..", "raw"))), 1)
+
+    def test_a_symbolic_link_to_the_raw_folder_is_refused(self):
+        link = os.path.join(self.root, "demux")
+        os.symlink(self.raw, link)
+        self.assertEqual(len(self.checker.check(self.raw, link)), 1)
+
+    def test_a_file_is_not_a_folder(self):
+        path = os.path.join(self.root, "demux")
+        open(path, "w").close()
+        self.assertIn("exists and is not a folder", self.checker.check(self.raw, path)[0])
+
+    def test_a_missing_parent_is_reported(self):
+        problems = self.checker.check(self.raw, os.path.join(self.root, "no_such_folder", "demux"))
+        self.assertIn("does not exist", problems[0])
+
+    def test_a_relative_path_is_judged_against_the_current_folder(self):
+        previous = os.getcwd()
+        os.chdir(self.root)
+        try:
+            self.assertEqual(self.checker.check("raw", "demux"), [])
+            self.assertEqual(len(self.checker.check("raw", "raw")), 1)
+        finally:
+            os.chdir(previous)
 
 class ValidatorTests(unittest.TestCase):
     def setUp(self):
@@ -228,9 +278,9 @@ class ValidatorTests(unittest.TestCase):
         self.write_sheet(make_sheet())
         self.write_fastq("97_S97_R1_001.fastq.gz", "97_S97_R2_001.fastq.gz", "98_S98_R1_001.fastq.gz", "98_S98_R2_001.fastq.gz")
 
-    def validator(self, tools=None):
-        return V.DemuxInputsValidator(self.sheet_path, self.fastq, tool_checker=tools or good_tool_checker())
-
+    def validator(self, tools=None, output_dir=None):
+        return V.DemuxInputsValidator(self.sheet_path, self.fastq, output_dir, tool_checker=tools or good_tool_checker())
+    
     def headings(self, err):
         return [h for h, _ in err.sections]
 
@@ -308,6 +358,33 @@ class ValidatorTests(unittest.TestCase):
             self.validator().validate()
         self.assertIn("does not exist", str(ctx.exception))
 
+    def test_an_output_folder_that_is_the_raw_folder_is_reported_in_its_own_section(self):
+        self.good_inputs()
+        with self.assertRaises(V.InputValidationError) as ctx:
+            self.validator(output_dir=self.fastq).validate()
+        self.assertEqual(self.headings(ctx.exception), ["Output folder (%s)" % self.fastq])
+        self.assertIn("same folder as the raw FASTQ folder", str(ctx.exception))
+
+    def test_a_good_output_folder_changes_nothing(self):
+        self.good_inputs()
+        self.assertEqual([g.shared for g in self.validator(output_dir=os.path.join(self.dir.name, "demux")).validate().groups], ["97", "98"])
+
+    def test_without_an_output_folder_there_is_no_output_check(self):
+        self.good_inputs()
+        self.validator().validate()                  # no exception, and no section about an output folder
+
+    def test_tool_and_output_problems_arrive_together(self):
+        self.good_inputs()
+        with self.assertRaises(V.InputValidationError) as ctx:
+            self.validator(missing_tool_checker(), output_dir=self.fastq).validate()
+        self.assertEqual(self.headings(ctx.exception), ["Tools", "Output folder (%s)" % self.fastq])
+
+    def test_the_output_folder_is_checked_even_when_the_sheet_is_bad(self):
+        self.write_sheet(bad_sheet())
+        with self.assertRaises(V.InputValidationError) as ctx:
+            self.validator(output_dir=self.fastq).validate()
+        self.assertTrue(any(heading.startswith("Output folder") for heading in self.headings(ctx.exception)))
+
     def test_warnings_survive_on_the_returned_sheet(self):
         self.write_sheet(make_sheet().replace("Minimum coverage:,0.9,,,\n", ""))
         self.write_fastq("97_S97_R1_001.fastq.gz", "97_S97_R2_001.fastq.gz", "98_S98_R1_001.fastq.gz", "98_S98_R2_001.fastq.gz")
@@ -338,14 +415,14 @@ class DeveloperCommandTests(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def run_command(self, sheet_text, files=()):
+    def run_command(self, sheet_text, files=(), extra=()):
         with open(self.sheet_path, "w") as fh:
             fh.write(sheet_text)
         for name in files:
             open(os.path.join(self.dir.name, name), "w").close()
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = V.main([self.sheet_path, self.dir.name], tool_checker=good_tool_checker())
+            code = V.main([self.sheet_path, self.dir.name, *extra], tool_checker=good_tool_checker())
         return code, out.getvalue(), err.getvalue()
 
     def test_a_good_sheet_prints_the_plan_and_exits_0(self):
@@ -362,6 +439,17 @@ class DeveloperCommandTests(unittest.TestCase):
         code, _out, err = self.run_command(bad_sheet())
         self.assertEqual(code, 1)
         self.assertIn("has no value", err)
+
+    def test_an_output_folder_that_is_the_raw_folder_exits_1(self):
+        code, _out, err = self.run_command(make_sheet(index=False), extra=["-o", self.dir.name])
+        self.assertEqual(code, 1)
+        self.assertIn("same folder as the raw FASTQ folder", err)
+
+    def test_a_new_output_folder_is_accepted_and_not_created(self):
+        new_folder = os.path.join(self.dir.name, "demux")
+        code, _out, _err = self.run_command(make_sheet(index=False), extra=["-o", new_folder])
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(new_folder))
 
     def test_a_missing_sheet_file_exits_1(self):
         out, err = io.StringIO(), io.StringIO()

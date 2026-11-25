@@ -21,10 +21,10 @@ import os
 import shutil
 import subprocess
 import sys
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 
+from TileSeqDemux import naming
 from TileSeqDemux.rules import Rule, RuleSet
 from TileSeqDemux.sheet import SheetError, SheetReader
 
@@ -119,15 +119,13 @@ class FastqFolderChecker:
 
     Each shared sample needs exactly one R1 and one R2 file. No file may already exist for a unique sample, because
     the demultiplexed output would collide with it. The folder is listed once and the names are grouped by sample ID,
-    the first "_" token, which is how tileseq_mut reads them."""
-
-    SUFFIX = ".fastq.gz"
+    the first "_" token, which is how tileseq_mut reads them (naming.py states those rules)."""
 
     def check(self, sheet, folder):
         """Return a list of problems, empty when the folder is fine."""
         if not os.path.isdir(folder):
             return ["FASTQ folder %s does not exist" % folder]
-        files = self._names_by_sample_id(folder)
+        files = naming.group_by_sample_id(sorted(os.listdir(folder)))
         problems = []
         for shared, mate in itertools.product(sheet.shared_ids, (1, 2)):
             problems += self._mate_problems(files, shared, mate, folder)
@@ -136,16 +134,8 @@ class FastqFolderChecker:
         return problems
 
     @staticmethod
-    def _names_by_sample_id(folder):
-        by_id = defaultdict(list)
-        for name in sorted(os.listdir(folder)):
-            if "_" in name:
-                by_id[name.split("_")[0]].append(name)
-        return by_id
-
-    def _mate_problems(self, files, shared, mate, folder):
-        marker = "_R%d_" % mate
-        hits = [name for name in files.get(shared, []) if name.endswith(self.SUFFIX) and marker in name[len(shared) + 1:]]
+    def _mate_problems(files, shared, mate, folder):
+        hits = [name for name in files.get(shared, []) if naming.is_mate_file(name, shared, mate)]
         if len(hits) == 1:
             return []
         listed = (": " + ", ".join(hits)) if hits else ""
@@ -160,25 +150,65 @@ class FastqFolderChecker:
                 % (unique, folder, ", ".join(clash[:3]))]
 
 
+@dataclass(frozen=True)
+class OutputFolderPaths:
+    """The raw FASTQ folder and the folder tileseq_demux is asked to write to."""
+    input_folder: str
+    output_folder: str
+
+    @property
+    def parent(self):
+        return os.path.dirname(os.path.abspath(self.output_folder))
+
+    def details(self, context):
+        return {"output": self.output_folder, "input": self.input_folder, "parent": self.parent}
+
+
+OUTPUT_FOLDER_RULES = RuleSet(
+    details=("output", "input", "parent"),
+    rules=[
+        Rule("not_a_folder", "output path {output} exists and is not a folder",
+             lambda paths, context: os.path.exists(paths.output_folder) and not os.path.isdir(paths.output_folder)),
+        Rule("same_as_input", "output folder {output} is the same folder as the raw FASTQ folder {input}; the output must be a "
+                              "different folder, because a pooled sample's tile file can have its raw file's name and would overwrite it",
+             lambda paths, context: os.path.realpath(paths.output_folder) == os.path.realpath(paths.input_folder)),
+        Rule("no_parent", "the folder {parent}, which should hold the output folder, does not exist",
+             lambda paths, context: not os.path.isdir(paths.parent)),
+    ])
+
+
+class OutputFolderChecker:
+    """Checks the output folder against the raw folder before anything is written. What the folder already holds, and
+    what --resume and --force do with it, is decided later by OutputFolder."""
+
+    def check(self, input_folder, output_folder):
+        """Return a list of problems, empty when the output folder can be used."""
+        return OUTPUT_FOLDER_RULES.check(OutputFolderPaths(input_folder, output_folder)).problems
+
+
 class DemuxInputsValidator:
     """Runs every check and reports everything found in one message.
 
     Collaborators are passed in, so a test can replace any of them. `validate()` returns the ParameterSheet when all
     checks pass, so the caller never has to read the sheet a second time."""
 
-    def __init__(self, sheet_path, fastq_dir, tool_checker=None, sheet_reader=None, folder_checker=None):
+    def __init__(self, sheet_path, fastq_dir, output_dir=None, tool_checker=None, sheet_reader=None, folder_checker=None,
+                 output_checker=None):
         self._sheet_path = sheet_path
         self._fastq_dir = fastq_dir
+        self._output_dir = output_dir
         self._tools = tool_checker or ToolChecker()
         self._reader = sheet_reader or SheetReader()
         self._folder = folder_checker or FastqFolderChecker()
+        self._output = output_checker or OutputFolderChecker()
 
     def validate(self):
         """Return the ParameterSheet, or raise InputValidationError listing every problem."""
         sheet, sheet_problems = self._read_sheet()
         checks = [("Tools", self._tool_problems()),
                   ("Parameter sheet (%s)" % self._sheet_path, sheet_problems),
-                  ("Input files (%s)" % self._fastq_dir, self._folder_problems(sheet))]
+                  ("Input files (%s)" % self._fastq_dir, self._folder_problems(sheet)),
+                  ("Output folder (%s)" % self._output_dir, self._output_problems())]
         failed = [(heading, problems) for heading, problems in checks if problems]
         if failed:
             raise InputValidationError(failed)
@@ -202,20 +232,26 @@ class DemuxInputsValidator:
             return ["not checked until the parameter sheet is valid"]
         return self._folder.check(sheet, self._fastq_dir)
 
+    def _output_problems(self):
+        if self._output_dir is None:
+            return []
+        return self._output.check(self._fastq_dir, self._output_dir)
+
 
 def main(argv=None, tool_checker=None):
     parser = argparse.ArgumentParser(description="Developer check: validate a sheet and FASTQ folder and print the plan.")
     parser.add_argument("sheet")
     parser.add_argument("fastq_dir")
+    parser.add_argument("-o", "--output", help="the folder tileseq_demux would write to; it is checked, not created")
     parser.add_argument("--min-cover", type=float, help="override the sheet's Minimum coverage in the printed plan")
     args = parser.parse_args(argv)
     try:
-      sheet = DemuxInputsValidator(args.sheet, args.fastq_dir, tool_checker=tool_checker).validate()
+        sheet = DemuxInputsValidator(args.sheet, args.fastq_dir, args.output, tool_checker=tool_checker).validate()
     except InputValidationError as err:
-      print(err, file=sys.stderr)
-      return 1
+        print(err, file=sys.stderr)
+        return 1
     for warning in sheet.warnings:
-      print("warning:", warning)
+        print("warning:", warning)
     print("\n".join(sheet.describe(args.min_cover)))
     return 0
 
