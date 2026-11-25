@@ -29,7 +29,7 @@ import shutil
 from collections import Counter
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from TileSeqDemux import naming
 
@@ -70,6 +70,21 @@ class FolderState(Enum):
     COMPLETE = "complete"       # a finished run of ours
     FOREIGN = "foreign"         # something that is not ours, or not a folder
 
+class FolderFacts(NamedTuple):
+    """The three yes/no facts that settle what a folder holds."""
+    missing_or_empty: bool    # there is nothing there yet
+    made_by_us: bool          # it has a run record written by tileseq_demux
+    finished: bool            # that run finished: it says complete, the manifest is there and the marker is gone
+
+
+# Other combinations cannot happen, since a folder with a run record is not empty and a run cannot finish without a
+# record. If one ever did, the safe reading is foreign: touch nothing.
+_STATE_OF = {
+    FolderFacts(missing_or_empty=True, made_by_us=False, finished=False): FolderState.NEW,
+    FolderFacts(missing_or_empty=False, made_by_us=False, finished=False): FolderState.FOREIGN,
+    FolderFacts(missing_or_empty=False, made_by_us=True, finished=False): FolderState.INCOMPLETE,
+    FolderFacts(missing_or_empty=False, made_by_us=True, finished=True): FolderState.COMPLETE,
+}
 
 def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
@@ -177,17 +192,18 @@ class OutputFolder:
     # -- what the folder holds ----------------------------------------------------------------------------------
     @property
     def state(self):
-        if not os.path.exists(self.path):
-            return FolderState.NEW
-        if not os.path.isdir(self.path):
-            return FolderState.FOREIGN
-        if not os.listdir(self.path):
-            return FolderState.NEW
-        if not os.path.isfile(self.run_record):
-            return FolderState.FOREIGN
-        finished = (self._read_json(self.run_record).get("status") == "complete"
-                    and os.path.isfile(self.manifest) and not os.path.exists(self.marker))
-        return FolderState.COMPLETE if finished else FolderState.INCOMPLETE
+        made_by_us = os.path.isfile(self.run_record)
+        facts = FolderFacts(missing_or_empty=self._is_missing_or_empty(), made_by_us=made_by_us,
+                            finished=made_by_us and self._is_finished())
+        return _STATE_OF.get(facts, FolderState.FOREIGN)
+
+    def _is_missing_or_empty(self):
+        return not os.path.exists(self.path) or (os.path.isdir(self.path) and not os.listdir(self.path))
+
+    def _is_finished(self):
+        """A run is finished when it says so, the manifest is there and the marker is gone."""
+        return (self._read_json(self.run_record).get("status") == "complete"
+                and os.path.isfile(self.manifest) and not os.path.exists(self.marker))
 
     def path_of(self, name):
         return os.path.join(self.path, name)
