@@ -153,7 +153,121 @@ class TallyTests(unittest.TestCase):
     def test_the_summary_is_plain_numbers_in_a_stable_order(self):
         tally = self.fill(C.Tally(["1"]), C.Assignment("off_tile"), C.Assignment("assigned:1", ("1",)))
         self.assertEqual(tally.summary(), {"pairs_in": 2, "assigned": 1, "unassigned": 1,
-                                           "categories": {"assigned:1": 1, "off_tile": 1}, "written": {"1": 1}})
+                                           "categories": {"assigned:1": 1, "off_tile": 1}, "written": {"1": 1},
+                                           "off_tile_regions": {}})
+
+    def test_off_tile_pairs_are_counted_by_region_and_only_those(self):
+        tally = self.fill(C.Tally(["1", "12"]), C.Assignment("off_tile", (), "6"), C.Assignment("off_tile", (), "6"),
+                          C.Assignment("off_tile", (), "mixed"), C.Assignment("off_tile", (), "12"),
+                          C.Assignment("assigned:1", ("1",)), C.Assignment("r1_unmapped"))
+        self.assertEqual(tally.off_tile_regions, {"6": 2, "mixed": 1, "12": 1})
+        self.assertEqual(sum(tally.off_tile_regions.values()), tally.categories["off_tile"])
+
+    def test_a_region_adds_nothing_to_the_tile_counts(self):
+        tally = self.fill(C.Tally(["1", "12"]), C.Assignment("off_tile", (), "6"))
+        self.assertEqual((tally.written, tally.assigned, tally.unassigned), ({"1": 0, "12": 0}, 0, 1))
+
+    def test_the_summary_lists_tiles_in_numeric_order_then_the_other_labels(self):
+        tally = self.fill(C.Tally([]), *[C.Assignment("off_tile", (), label) for label in ("outside_tiles", "10", "mixed", "2", "1")])
+        self.assertEqual(list(tally.summary()["off_tile_regions"]), ["1", "2", "10", "mixed", "outside_tiles"])
+
+
+ALL_TILES = [Tile(str(number), start, end) for number, (start, end) in enumerate(
+    [(2, 13), (14, 49), (50, 87), (88, 123), (124, 160), (161, 195), (196, 229), (230, 264), (265, 301), (302, 337), (338, 372), (373, 396)], 1)]
+
+
+class RegionMapTests(unittest.TestCase):
+    """Where on the gene a mate lies, using the twelve tiles of the sheet (tile 3 is CDS 148 to 261)."""
+
+    def regions(self, cds_start=1, tiles=ALL_TILES):
+        return C.RegionMap(tiles, cds_start)
+
+    def test_the_tile_table_is_the_one_in_the_test_sheet(self):
+        sheet_tiles = SheetReader().parse(make_sheet()).tiles
+        self.assertEqual([(tile.number, tile.begins, tile.ends) for tile in ALL_TILES],
+                         [(number, sheet_tiles[number].begins, sheet_tiles[number].ends) for number in sorted(sheet_tiles, key=int)])
+
+    def test_a_mate_inside_a_tile_is_in_that_tile(self):
+        self.assertEqual(self.regions().of_mate(A.Alignment(200, 60, 60)), "3")
+
+    def test_a_mate_over_two_tiles_is_in_the_one_it_overlaps_more(self):
+        self.assertEqual(self.regions().of_mate(A.Alignment(130, 60, 60)), "3")        # CDS 130 to 189: 18 bases in tile 2, 42 in tile 3
+
+    def test_equal_overlap_goes_to_the_lower_tile_whatever_the_order_the_tiles_were_given_in(self):
+        mate = A.Alignment(118, 60, 60)                                               # CDS 118 to 177: 30 bases in tile 2, 30 in tile 3
+        self.assertEqual(self.regions().of_mate(mate), "2")
+        self.assertEqual(self.regions(tiles=list(reversed(ALL_TILES))).of_mate(mate), "2")
+
+    def test_a_mate_beyond_either_end_is_outside_the_tiles(self):
+        self.assertEqual(self.regions().of_mate(A.Alignment(1300, 80, 80)), "outside_tiles")
+        self.assertEqual(self.regions().of_mate(A.Alignment(-50, 40, 40)), "outside_tiles")
+
+    def test_a_mate_that_ends_one_base_before_the_first_tile_or_starts_one_base_after_the_last_is_outside(self):
+        self.assertEqual(self.regions().of_mate(A.Alignment(-36, 40, 40)), "outside_tiles")        # CDS -36 to 3; tile 1 starts at 4
+        self.assertEqual(self.regions().of_mate(A.Alignment(1189, 40, 40)), "outside_tiles")       # tile 12 ends at 1188
+
+    def test_a_mate_that_only_just_reaches_a_tile_is_in_it(self):
+        self.assertEqual(self.regions().of_mate(A.Alignment(1, 4, 4)), "1")           # CDS 1 to 4: one base in tile 1
+
+    def test_the_cds_start_is_taken_into_account(self):
+        self.assertEqual(self.regions(cds_start=111).of_mate(A.Alignment(310, 60, 60)), "3")        # CDS 200 to 259
+
+    def test_the_span_and_not_the_length_decides(self):
+        self.assertEqual(self.regions().of_mate(A.Alignment(200, 150, 20)), "3")      # a long insertion: only 20 bases of template
+
+    def test_two_mates_in_one_place_give_that_region(self):
+        self.assertEqual(self.regions().of_pair(A.Alignment(200, 60, 60), A.Alignment(210, 50, 50)), "3")
+
+    def test_two_mates_in_different_places_are_mixed(self):
+        self.assertEqual(self.regions().of_pair(A.Alignment(200, 60, 60), A.Alignment(500, 60, 60)), "mixed")
+
+    def test_a_mate_outside_and_a_mate_inside_are_mixed(self):
+        self.assertEqual(self.regions().of_pair(A.Alignment(200, 60, 60), A.Alignment(1300, 60, 60)), "mixed")
+
+    def test_two_mates_outside_are_outside_tiles(self):
+        self.assertEqual(self.regions().of_pair(A.Alignment(1300, 60, 60), A.Alignment(1320, 60, 60)), "outside_tiles")
+
+    def test_with_no_tiles_everything_is_outside(self):
+        self.assertEqual(self.regions(tiles=[]).of_mate(A.Alignment(200, 60, 60)), "outside_tiles")
+
+
+class OffTileRegionTests(unittest.TestCase):
+    """The classifier with the sheet's tiles given for labelling. The job's tiles are 1 and 12; positions are CDS positions."""
+
+    def setUp(self):
+        self.sheet = SheetReader().parse(make_sheet())
+        self.classifier = C.PairClassifier([TILE_1, TILE_12], 1, 0.9, regions=list(self.sheet.tiles.values()))
+
+    def test_an_off_tile_pair_is_labelled_with_where_its_mates_lie(self):
+        mate = A.Alignment(481, 60, 60)                                               # inside tile 6
+        self.assertEqual(self.classifier.classify(mate, mate), C.Assignment("off_tile", (), "6"))
+
+    def test_mates_in_different_tiles_are_labelled_mixed(self):
+        self.assertEqual(self.classifier.classify(INSIDE_1, INSIDE_12), C.Assignment("off_tile", (), "mixed"))
+
+    def test_a_pair_too_short_inside_this_jobs_own_tile_is_labelled_with_that_tile(self):
+        short = A.Alignment(1125, 45, 45)                                             # 45 of the 64 bases tile 12 needs
+        self.assertEqual(self.classifier.classify(short, short), C.Assignment("off_tile", (), "12"))
+
+    def test_a_pair_beyond_the_gene_is_labelled_outside_tiles(self):
+        beyond = A.Alignment(1300, 60, 60)
+        self.assertEqual(self.classifier.classify(beyond, beyond), C.Assignment("off_tile", (), "outside_tiles"))
+
+    def test_an_off_tile_pair_is_still_written_to_no_tile(self):
+        mate = A.Alignment(481, 60, 60)
+        self.assertEqual(self.classifier.classify(mate, mate).tiles, ())
+
+    def test_only_off_tile_pairs_get_a_region(self):
+        inside = self.classifier.classify(INSIDE_1, INSIDE_1)
+        unmapped = self.classifier.classify(None, INSIDE_1)
+        twins = C.PairClassifier([Tile("1", 2, 13), Tile("2", 2, 13)], 1, 0.9, regions=ALL_TILES).classify(INSIDE_1, INSIDE_1)
+        self.assertEqual((inside.region, unmapped.region, twins.category, twins.region), ("", "", "ambiguous", ""))
+
+    def test_without_the_sheets_tiles_an_off_tile_pair_has_no_region(self):
+        mate = A.Alignment(481, 60, 60)
+        plain = C.PairClassifier([TILE_1, TILE_12], 1, 0.9)
+        self.assertEqual(plain.classify(mate, mate), C.Assignment("off_tile"))
+        self.assertEqual(plain.classify(mate, mate).region, "")
 
 
 class PassOverSamTests(unittest.TestCase):
@@ -221,6 +335,12 @@ class AgreementWithThePrototypeTests(unittest.TestCase):
         cls.sheet = SheetReader().parse(make_sheet())
         cls.cds_start = cls.sheet.cds_start
 
+    def random_pair(self, rng, tiles):
+        first, second = self.random_mate(rng, tiles), self.random_mate(rng, tiles)
+        if first is not None and second is not None and rng.random() < 0.7:      # most pairs have both mates in one place
+            second = A.Alignment(first.position + rng.randint(-30, 30), second.length, second.span)
+        return first, second
+
     def random_mate(self, rng, tiles):
         if rng.random() < 0.05:
             return None
@@ -235,10 +355,7 @@ class AgreementWithThePrototypeTests(unittest.TestCase):
         classifier = C.PairClassifier(tiles, self.cds_start, min_cover, ambiguous)
         categories = set()
         for _ in range(pairs):
-            first, second = self.random_mate(rng, tiles), self.random_mate(rng, tiles)
-            # most pairs have both mates in the same region, as real pairs do
-            if first is not None and second is not None and rng.random() < 0.7:
-                second = A.Alignment(first.position + rng.randint(-30, 30), second.length, second.span)
+            first, second = self.random_pair(rng, tiles)
             expected = reference_classify(first, second, reference_geom, self.cds_start, ambiguous)
             got = classifier.classify(first, second)
             self.assertEqual((got.category, list(got.tiles)), expected, f"pair {first} {second}")
@@ -261,6 +378,23 @@ class AgreementWithThePrototypeTests(unittest.TestCase):
             for min_cover in (0.5, 0.9):
                 categories = self.compare(tiles, min_cover, ambiguous, seed=ord(ambiguous[0]))
                 self.assertIn("ambiguous", categories)
+
+    def test_regions_never_change_the_category_or_the_tiles(self):
+        """The region is a label on off-tile pairs and nothing more: with all the sheet's tiles given for labelling, every
+        pair gets exactly the category and the tiles it gets without them, and only off-tile pairs carry a region."""
+        job_tiles = [self.sheet.tiles["1"], self.sheet.tiles["12"]]
+        everywhere = list(self.sheet.tiles.values())
+        plain = C.PairClassifier(job_tiles, self.cds_start, 0.9)
+        labelled = C.PairClassifier(job_tiles, self.cds_start, 0.9, regions=everywhere)
+        rng = random.Random(3)
+        seen = set()
+        for _ in range(8000):
+            first, second = self.random_pair(rng, everywhere)
+            without, with_regions = plain.classify(first, second), labelled.classify(first, second)
+            self.assertEqual((with_regions.category, with_regions.tiles), (without.category, without.tiles))
+            self.assertEqual(bool(with_regions.region), with_regions.category == "off_tile")
+            seen.add(with_regions.region)
+        self.assertTrue({"", "mixed", "outside_tiles"} <= seen and len(seen) > 6, f"regions seen: {sorted(seen)}")
 
     def test_every_category_turns_up_so_the_agreement_is_not_vacuous(self):
         tiles = [Tile("a", 2, 13), Tile("b", 6, 20)]
