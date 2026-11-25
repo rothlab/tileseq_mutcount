@@ -163,7 +163,9 @@ class OutputPlan:
             raw_r1, raw_r2 = self.raw_pairs[job]
             lines.append(f"job {job}: reads {raw_r1} and {raw_r2}")
             lines.append("  writes " + ", ".join(entry.name for entry in self.tile_files(job)))
-        lines.append(f"{len(self.links)} links to raw files (unshared samples and other FASTQ files)")
+        lines.append(f"links to raw files (unshared samples and other FASTQ files): {len(self.links)}")
+        lines.append(f"reports: {MANIFEST_NAME}, {LOGS_NAME}/ (run record, plan, one record per job); "
+              f"{MARKER_NAME} until the run finishes")
         return lines
 
     def to_dict(self):

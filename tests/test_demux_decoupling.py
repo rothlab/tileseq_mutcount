@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import unittest
+import warnings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,7 +29,10 @@ def python_files(package):
 def imported_packages(path):
     """Top-level names imported by one file."""
     with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=path)
+        source = fh.read()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")       # TileSeqMut has invalid escape sequences; reading its imports is not a lint
+        tree = ast.parse(source, filename=path)
     names = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
